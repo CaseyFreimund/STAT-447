@@ -1,0 +1,398 @@
+---
+title: "Assessing Treatment Impact on Fish Mortality"
+author: "Casey Freimund and Alex Matz"
+date: "2/12/2020"
+output:
+  word_document: default
+---
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Loads in Packages
+library(tidyverse)
+library(ggpubr)
+```
+
+## Introduction
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Loads in Data Files
+fish=read.csv("Morphometrics.csv", header = TRUE)
+survive=read.csv("Survival.csv", header = TRUE)
+```
+
+A lethal chemical treatment is being tested to control the growing population of an invasive carp species. This experiment looked at the impact of the treatment on the carp and the non-target species that reside in the same rivers. The results of the experiment included two data sets published by the Untied States Geological Survey. The first data set (Morphometrics) consists of individual characteristics of each fish, such as: trial (indoor, outdoor, gavage, and leaching), species (Bluegill, Common Carp, Fathead Minnows, and Yellow Perch), dosage level, tank number, standard Length in millimeters, and weight in grams.  The second data set (Survival) included the number of species that died over the total number of species in a tank within each trial and at every tested dosage level. The objective of this experiment was to compare the mortality rates of the controlled groups with the treatment groups across each species.
+
+## Preparing and Cleaning the Data
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# FISH DATA
+summary(fish)
+
+summary(fish$Dosage.Level)
+
+# Changes the dosage level from control to 0.
+fish=fish %>%
+  mutate(Dosage.Level=sub("control",0,Dosage.Level))
+
+# Gets rid of all labels in the dosage.level within observations
+fish=fish %>%
+  mutate(Dosage.Level=as.numeric(gsub("(.*) .*","\\1",Dosage.Level)))
+
+# Changes observations where dosage was in grams to milligrams.
+fish=fish %>%
+  mutate(Dosage.Level=factor(ifelse(Dosage.Level<1,Dosage.Level*1000,Dosage.Level)))
+
+# Replaces the CAP fish with missing length and weight with average length of CAP fish in same trial and tank.  Replaces weight with a weight that was computed using a linear model.
+fish %>%
+  filter(is.na(Standard.length))
+
+missing.length=fish %>% 
+  filter(Trial=="Leaching",Species=="CAP",Tank==3) %>%
+  summarise(mean(Standard.length, na.rm = TRUE))
+missing.length=as.vector(missing.length,mode = "numeric")
+
+fish=fish %>%
+  mutate(Standard.length=replace_na(Standard.length,missing.length))
+
+weight.finder=lm(Weight~Standard.length,data=fish, subset = (Trial=="Leaching" & Species=="CAP" & Tank==3))
+missing.weight=predict(weight.finder,newdata = data.frame(Standard.length=130.2))
+
+fish=fish %>%
+  mutate(Weight=replace_na(Weight,missing.weight))
+
+fish %>% 
+  filter(Trial=="Leaching",Species=="CAP",Tank==3)
+
+# Changes CCP to CAP because they stand for the same fish.
+fish=fish %>%
+  mutate(Species=replace(Species,which(Species=="CCP"),"CAP"))
+
+fish$Species=droplevels(fish$Species)
+
+# Remove Leaching Trials because they aren't significant to what we are trying to answer.
+fish=fish %>%
+  filter(Trial!="Leaching")
+fish$Trial=droplevels(fish$Trial)
+
+```
+
+The individual fish data required manipulation to make the data set organized, as well as making measurements standard across the dataset. The leaching trial was used to assess how much of the treatment leached into the water when a lethal dose was applied. Due to the nature of the experiment, we removed those observations. Within the data, there are dosage levels of 0 mg and dosage levels equal to “control”. Since 0 mg was the control group and most dosage levels are a numeric value, we made all the control groups equal to 0 mg. The data set also contained dosage levels recorded as grams and milligrams. For comparison purposes, we converted all dosage levels to milligrams. By examining the type of species being tested, we found that Carp was either recorded as “CCP” or “CAP.”  Very few carp observations were recorded as “CCP,”  so we converted those observations to “CAP.”  Once the fish data contained only clean information and the measurements were standarized, we were able to look for missing or unusual values. We found one observation where a fish was missing its recorded length and weight. Instead of deleting this value, we opted to estimate its length and weight.  By looking at a dot plot of weight against length, we noticed the fish size varied within each trial. Accounting for this, we gave our fish a length and weight equal to the average length and weight of its species within its respective tank.  After handling the only observation with missing values, we were able to move on to the next data set.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# SURVIVAL DATA
+summary(survive)
+
+# Removing Mort and Conc 1, 4, 8, 24, 48, and 72.  Don't pertain to subject of interest.
+survive=survive %>%
+  select(Trial,Tank,Dosage.Level,Species,TotalMort)
+
+# Changes the dosage level from control to 0.
+survive=survive %>%
+  mutate(Dosage.Level=sub("Control",0,Dosage.Level))
+
+# Gets rid of all labels in the dosage.level within observations
+survive=survive %>%
+  mutate(Dosage.Level=as.numeric(gsub("(.*) .*","\\1",Dosage.Level)))
+
+# Changes observations where dosage was in grams to milligrams.
+survive=survive %>%
+  mutate(Dosage.Level=factor(ifelse(Dosage.Level<1,Dosage.Level*1000,Dosage.Level)))
+
+survive %>%
+  filter(Species=="CAP Adult" | Species == "CAP Juvenile")
+
+# Changes "CAP Adult/Juvenile" to "CAP" and adds another column where Juvenile and Adult CAP are still seperated.
+survive=survive %>%
+  mutate(Specifics=Species)
+survive=survive %>% 
+  mutate(Species = replace(Species,which(Species=="CAP Adult" | Species=="CAP Juvenile"), "CAP"))
+
+survive$Species=droplevels(survive$Species)
+
+# Remove Leaching Trials because they aren't significant to what we are trying to answer.
+survive=survive %>%
+  filter(Trial!="Leaching")
+survive$Trial=droplevels(survive$Trial)
+
+# Fixes a problem where the TotalMort of a fish tank was 0/0 insead of 0/5.
+survive %>%
+  filter(TotalMort=="0/0")
+
+fish %>% 
+  filter(Trial=="Gavage", Tank==1)
+
+survive=survive %>%
+  mutate(TotalMort=replace(TotalMort,which(TotalMort=="0/0"),"0/5"))
+survive$TotalMort=droplevels(survive$TotalMort)
+
+# Creates 2 Seperate Data frames (indoor and outdoor trials) and computes the total proportion of fish died at each dosage level for the respective trial
+survive=survive %>%
+  mutate(died=as.numeric(gsub("([0-9]+)\\/[0-9]+","\\1",TotalMort)))
+
+survive=survive %>%
+  mutate(total=as.numeric(gsub("[0-9]+\\/([0-9]+)","\\1",TotalMort)))
+
+survive=survive %>%
+  group_by(Trial,Species, Dosage.Level,Specifics) %>%
+  summarise(died=sum(died),lived=sum(total)-sum(died),total=sum(total),prop.died=sum(died)/sum(total))
+
+indoor=survive %>%
+  filter(Trial=="Indoor") %>%
+  group_by(Species, Dosage.Level,Specifics) %>%
+  summarise(died=sum(died),lived=sum(total)-sum(died),total=sum(total),prop.died=sum(died)/sum(total))
+
+outdoor=survive %>%
+  filter(Trial=="Outdoor") %>%
+  group_by(Species, Dosage.Level,Specifics) %>%
+  summarise(died=sum(died),lived=sum(total)-sum(died),total=sum(total),prop.died=sum(died)/sum(total))
+```
+
+The survival data set required the same maltipulations of the removal of the leaching trials, changing all control groups to a dosage level of 0 mg, and converion of all dosage levels to mg.  There were variables that measured the concentration of the water at varying hours and how many fish were dead at each of those hours, but for our purpose of finding the total number of each species that were dead at the end of the experiment, the variables were removed. The variable “TotalMort” was recorded as a fraction.  Under this variable, we found an observation where the total number of a species that died within a tank was 0/0. To fix this, we referenced the trial type and tank number for that species, to the fish data and counted the total number of fish species recorded for that observation.  During this process, we also noticed that the total number of fish in each trial tank were not the same. Therefore, we made a proportion of the total number of a species that died, over the total number of that species in a trial.  From here, we were able to start exploring the data.
+
+## Exploring the Data
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# Carp Mortality Box Plot
+survive %>%
+ filter(Specifics %in% c("CAP", "CAP Adult", "CAP Juvenile")) %>%
+ ggplot() +
+ aes(x = Dosage.Level, y = prop.died) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(x = "Dosage Level", y = "Mortality Rate", title = "Carp Mortality Rates Across All Trials") +
+ theme_minimal() +
+ facet_wrap(vars(Specifics))
+
+# Fish Length Box Plot
+ggplot(fish) +
+ aes(x = Species, y = Standard.length) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(y = "Length (mm)", title = "Fish Length") +
+ theme_minimal()
+
+# Fish Weight Box Plots
+ggplot(fish) +
+ aes(x = Species, y = Weight) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(y = "Weight (g)", title = "Fish Weights") +
+ theme_minimal()
+
+fish %>%
+ filter(!(Species %in% "CAP")) %>%
+ ggplot() +
+ aes(x = Species, y = Weight) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(y = "Weight (g)", title = "Fish Weights", subtitle = "Excluding Common Carp") +
+ theme_minimal()
+
+# Mortality Rate of Fish at Dosage Levels
+survive %>%
+ filter(!(Trial %in% "Gavage")) %>%
+ ggplot() +
+ aes(x = Species, y = prop.died, fill = Dosage.Level, colour = Dosage.Level) +
+ geom_boxplot() +
+ scale_fill_hue() +
+ scale_color_hue() +
+ labs(y = "Mortality Rate", title = "Mortality Rate of Fish at Various Dosage Levels", fill = "Dosage Level (mg)", color = "Dosage Level (mg)") +
+ theme_minimal()
+
+
+# Individual Fish Weights
+fish %>%
+  filter(Species %in% "CAP") %>%
+  ggplot() +
+  aes(x = Weight) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Weight (g)", y = "Density", title = "Carp Weights") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "BLG") %>%
+  ggplot() +
+  aes(x = Weight) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Weight (g)", y = "Density", title = "Blue Gill Weights") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "FHM") %>%
+  ggplot() +
+  aes(x = Weight) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Weight (g)", y = "Density", title = "Fathead Mino Weights") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "YEP") %>%
+  ggplot() +
+  aes(x = Weight) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Weight (g)", y = "Density", title = "Yellow Perch Weights") +
+  theme_minimal()
+
+# Individual Fish Lengths
+fish %>%
+  filter(Species %in% "CAP") %>%
+  ggplot() +
+  aes(x = Standard.length) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Length (mm)", y = "Density", title = "Carp Lengths") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "BLG") %>%
+  ggplot() +
+  aes(x = Standard.length) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Length (mm)", y = "Density", title = "Blue Gill Lengths") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "FHM") %>%
+  ggplot() +
+  aes(x = Standard.length) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Length (mm)", y = "Density", title = "Fathead Mino Lengths") +
+  theme_minimal()
+
+fish %>%
+  filter(Species %in% "YEP") %>%
+  ggplot() +
+  aes(x = Standard.length) +
+  geom_density(adjust = 1L, fill = "#0c4c8a") +
+  labs(x = "Length (mm)", y = "Density", title = "Yellow Perch Lengths") +
+  theme_minimal()
+
+# Comparing Fish Weight and Size
+fish %>%
+  group_by(Species) %>%
+  summarise(avg.weight=mean(Weight))
+
+fish %>%
+  group_by(Species) %>%
+  summarise(avg.length=mean(Standard.length))
+
+ggplot(fish) +
+ aes(x = Weight, y = Standard.length, colour = Trial) +
+ geom_point(size = 1L) +
+ scale_color_brewer(palette = "Set1") +
+ labs(x = "Weight (g)", y = "Length (mm)", title = "Fish Weight and Length", caption = "Each point represents the size and weight of an individual fish.") +
+ theme_minimal() +
+ facet_wrap(vars(Species), scales = "free")+
+  theme(
+  plot.caption = element_text(hjust = 0)
+  )
+
+ggplot(fish) +
+ aes(x = "", y = Weight, fill = Trial) +
+ geom_boxplot() +
+ scale_fill_brewer(palette = "Set1") +
+ labs(y = "Weight (g)", title = "Fish Weight", subtitle = "Bad Graph (Different Axis for each graph)") +
+ theme_minimal() +
+ facet_wrap(vars(Species), scales = "free")
+
+# Fish Mortality Comparisons 
+survive %>%
+ filter(!(Trial %in% "Gavage")) %>%
+ ggplot() +
+ aes(x = Species, y = prop.died, fill = Dosage.Level, colour = Dosage.Level) +
+ geom_boxplot() +
+ scale_fill_brewer(palette = "Set1") +
+ scale_color_brewer(palette = "Set1") +
+ labs(y = "Proportion Died", title = "Fish Mortality Rates", fill = "Dosage Level (mg)", color = "Dosage Level (mg)") +
+ theme_minimal() +
+ facet_wrap(vars(Trial))
+```
+
+The goal of the gavage (forced feeding) trials was to determine the lethal dose for treating Carp which only the Carp were tested. Based on these trials, it was found that half of the Carp would die with a dosage level of 26 mg.  It appears that as dosage level increased, within these trials, so did the mortality rate of the Carp.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# Gavage Box Plot
+survive %>%
+ filter(Trial %in% "Gavage") %>%
+ ggplot() +
+ aes(x = Dosage.Level, y = prop.died) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(x = "Dosage Level (mg)", y = "Mortality Rate", title = "Mortality Rate for Carp in Gavage Environment", caption = "This graph is meant to show the mortality rates in a Carp only environment \nat each dosage level to determine a proper lethal dose for the experiment.") +
+ theme_minimal()+
+  theme(
+  plot.caption = element_text(hjust = 0)
+  )
+```
+
+
+Additionally, we wanted to explore the possibility that the dosage levels would affect various fish based on their size. For example, in a given tank where 28 mg of a treatment was applied, would that dosage level kill as many of our smaller non-target fish as it did Carp. To assess this, we looked at the overall size of the fish by species. In general, the Carp were significantly heavier and longer than all non-target species. When we removed Carp, we found that Bluegills were significantly larger than Yellow Carp, and the Fathead Minnows were significantly smaller than all other species tested.  By graphing the individual lengths and widths of each fish and coloring them based on their trial, we were able to see that this pattern was consistent throughout all trials.  We were also able to see that Carp and Yellow Perch kept in the outdoor trials were larger than those kept in indoor trials.  Meanwhile, indoor and outdoor Bluegill were both relatively the same size.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.align='center'}
+ggplot(fish) +
+ aes(x = Weight, y = Standard.length, colour = Trial) +
+ geom_point(size = 1L) +
+ scale_color_brewer(palette = "Set1") +
+ labs(x = "Weight (g)", y = "Length (mm)", title = "Fish Weight and Length", caption = "Each point represents the size and weight of an individual fish.") +
+ theme_minimal() +
+ facet_wrap(vars(Species), scales = "free")+
+  theme(
+  plot.caption = element_text(hjust = 0)
+  )
+```
+
+## Statistical Methods
+
+All analyses were done in R (Version 3.6.2; R Core Team 2019). The `tidyverse` package (Wickham et al., 2019) was used for all data manipulation, preparing, cleaning, and graphing.  The `ggpubr` package (Version 0.2.5; Alboukadel Kassambara 2020) was used to display graphics.  We tested the effect of various dosage levels on mortality rates for various species.  Indoor treatments were given 20 mg and outdoor treatments were given 28 mg.  The proportion of species survived in each trial was used to assess if a treatment killed off Carp while keeping non-target species alive.  Proportions were also used in comparing if there was a difference between our treatment and control groups for individual species within each trial.  When differences in the proportions between treatment and control groups weren’t drastically different, a $\chi^2$ test was used with a level of $\alpha = .05$.
+
+## Results
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.align='center'}
+ggplot(indoor, aes(x=Species, y=prop.died, fill=Dosage.Level)) +
+    geom_bar(stat = "identity", position = position_dodge())+
+  labs(x = "Species", y = "Mortality Rate", title = "Indoor Fish Mortality \nRates", fill = "Dosage Level (mg)", color = "Dosage Level (mg)") +
+ theme_minimal()+
+ theme(legend.position = "bottom")
+
+ggplot(outdoor, aes(x=Specifics, y=prop.died, fill=Dosage.Level)) +
+    geom_bar(stat = "identity", position = position_dodge())+
+  labs(x = "Species", y = "Mortality Rate", title = "Outdoor Fish Mortality \nRates", fill = "Dosage Level (mg)", color = "Dosage Level (mg)") +
+ theme_minimal()+
+ theme(legend.position = "bottom")
+
+# ggarrange(in.plot,out.plot,nrow=1)+
+#   labs(caption="Mortality rates were calculated by adding the total number of each species that died and dividing it by the total number of that \nspecies, within each trial.")+
+#   theme(
+#   plot.caption = element_text(hjust = 0, size = 9)
+#   )
+```
+
+Indoor Bluegill had no significant differences in mortality rates between the control, 0% (n=24) and treatment groups 0%  (n=30).  In the outdoor trials, 12.5% of the control group bluegill died (n=48), while 0% Bluegill died in the treatment group. (n=53).
+
+Indoor Carp showed a significant difference in mortality rates between the treatment groups 46.7% (n=30) compared to the control groups 0% (n=24).  Outdoor Adult Carp showed a significant difference in mortality rates between the treatment group, 36.7% (n=30), and the control groups, 3.3% (n=30).  Meanwhile, outdoor Juvenile Carp didn’t show a significant difference in mortality rates between treatment, 0% (n=27), and control group, 3.7% (n=27).  
+
+Fathead Minnows were only tested with indoor trials. They showed a significant difference in mortality rate between the treatment groups, 76.9% (n=26), and the control groups, 0% (n=17).  
+Indoor Yellow Perch showed no significant difference in mortality rates between the treatment groups, 15.38% (n=26), and the control group, 4.8% (n=21, $\chi^2=0.488, p= 0.48$).  Outdoor Yellow Perch showed no significant difference in mortality rates between the control group, 0% (n=60), and the treatment groups, 0% (n=56).  
+
+The morphometrics of the fish show a large difference in weight between them, which may have had an impact on the mortality rate of the smaller fish.  For the indoor trial, the Fathead Minnows' mortality rate of 76.9%, and the Carps' rate of 46.7%, showed no significant difference in mortality ($\chi^2=4.153, p=0.042$).  Overall, most non-target fish survived the indoor trial, excluding Fathead Minnows, while most Indoor Carp died. Most non-target fish and Juvenile Carp survived the outdoor trials, while only 36.67% of Adult Carp did not survive.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# OUTDOOR CAP Adult
+out.adultCAP=outdoor %>%
+  filter(Specifics=="CAP Adult") %>%
+  select(Dosage.Level,died,lived)
+out.adultCAP=as.table(as.matrix(out.adultCAP[,3:4]))
+
+prop.test(out.adultCAP)
+
+# Indoor YEP
+in.YEP=indoor %>%
+  filter(Specifics=="YEP") %>%
+  select(Dosage.Level,died,lived)
+in.YEP=as.table(as.matrix(in.YEP[,3:4]))
+
+prop.test(out.adultCAP)
+
+
+# CAP and FHM
+cap.fhm=indoor %>%
+  filter(Species %in% c("CAP","FHM"), Dosage.Level=="20") %>%
+  select(Dosage.Level,died,lived)
+
+cap.fhm=as.table(as.matrix(cap.fhm[,3:4]))
+prop.test(cap.fhm)
+```
