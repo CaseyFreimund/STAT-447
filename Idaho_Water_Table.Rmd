@@ -1,0 +1,688 @@
+---
+title: "Idaho Groundwater Trends"
+author: "Casey Freimund"
+date: "4/13/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# Loads in Packages
+library(tidyverse)
+library(lubridate)
+library(maps)
+library(mapdata)
+library(mblm)
+```
+
+## Introduction
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Loads in data files
+samples=read.csv("Samples.csv", header = TRUE)
+monLoc=read.csv("MonitoringLocation.csv", header=TRUE)
+states=map_data("state")
+states=states%>%
+  filter(region=="idaho")
+```
+
+Groundwater is an important resource throughout the state of Idaho.  According to the Idaho Department of Environmental Quality, around nine billion gallons of ground water are withdrawn every day.  About 60% of total groundwater withdrawn is used for agriculture and 4% is used for drinking water.  Analyzing the trends in groundwater can help the state of Idaho and its citizens determine if the water is safe to drink, and if it can be beneficial or detrimental to their crops.  Measurements on Idaho’s groundwater characteristics were collected from a variety of locations across the state, between the years 1917 and 2016.  The purpose of this analysis is to assess how the analytes are changing over time, and whether they are increasing or decreasing at each monitoring location.  For the purpose of this analysis, the top five most measured analytes from 1990 to 2016 will be taken into consideration.  These analytes include water temperature ($^\circ$C), pH levels, arsenic and chloride levels (mg/L), and the water’s conductivity ($\mu S/cm$).  In order to accurately estimate trend, only locations with more than 10 observations for a specified analyte were considered.  
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Preparing and Cleaning the Data
+
+
+# Renaming the Location variable in monitoring location dataframe to match location variable in samples data frame.
+monLoc=monLoc%>%
+  rename(FK.MonitoringLocation = PK.MonitoringLocation)
+monLoc$FK.MonitoringLocation=as.factor(monLoc$FK.MonitoringLocation)
+
+# Adds column to monitoring location data frame called region. Based on Latitude and Longitude of monitoring station it was assigned a region.
+monLoc=monLoc%>%
+  mutate(Region=case_when(
+    LatitudeMeasure > 47 ~ "North",
+    LatitudeMeasure > 45.17 & LatitudeMeasure < 47 & LongitudeMeasure < (-114.52) ~ "North Central",
+    LatitudeMeasure > 43.19 & LatitudeMeasure < 45.17 & LongitudeMeasure > (-115) ~ "Central",
+    LatitudeMeasure < 45.17 & LongitudeMeasure < (-115) ~ "Southwest",
+    LatitudeMeasure < 43.19 & LongitudeMeasure > (-115) & LongitudeMeasure < (-113) ~ "South Central",
+    LatitudeMeasure < 43.19 & LongitudeMeasure > (-113) ~ "Southeast"
+  ))
+
+monLoc=monLoc%>%
+  mutate(Region=case_when(is.na(Region)~"Central",
+                          TRUE ~ Region))
+
+# Region was added to samples data frame to use region specific groundwater trends.
+reg.vec=monLoc%>%
+  select(FK.MonitoringLocation,Region)
+
+samples$FK.MonitoringLocation=as.factor(samples$FK.MonitoringLocation)
+samples=samples%>%
+  left_join(reg.vec, by="FK.MonitoringLocation")
+```
+
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Converts date column from factor to date and only keeps observations that happened in 1990 or later.
+samples$Sample.Date=as_date(as.character(samples$Sample.Date), format="%m/%d/%Y")
+samples=samples %>%
+  filter(Sample.Date>="1990-01-01")
+summary(samples$Sample.Date)
+
+# Finds and filters obersvations that are the 5 most frequently sampled water characteristics.
+top5=samples %>%
+  group_by(Characteristic.Name)%>%
+  tally()%>%
+  arrange(desc(n))%>%
+  top_n(5,n)%>%
+  pull(Characteristic.Name)
+
+samples=samples %>% 
+  filter(Characteristic.Name %in% top5)
+
+samples=samples%>%
+  mutate_at(vars(Characteristic.Name, Characteristic.MeasurementUnits), funs(droplevels(.)))
+
+  
+levels(samples$Characteristic.Name)
+levels(samples$Characteristic.MeasurementUnits)
+
+# Removes observations where no measurement units/values were recorded.
+samples=samples%>%
+  filter(!is.na(Characteristic.MeasurementValue))
+
+# Looking at total number of measurements taken for each unit for the analytes of interest.
+samples %>%
+  filter(Characteristic.Name=="Arsenic")%>%
+  select(Characteristic.Name, Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  count()
+
+samples %>%
+  filter(Characteristic.Name=="Arsenic" & Characteristic.MeasurementUnits %in% c("mg/L", "ug/L"))%>%
+  select(Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  summarise(min=min(Characteristic.MeasurementValue), max=max(Characteristic.MeasurementValue))
+
+samples %>%
+  filter(Characteristic.Name=="Chloride")%>%
+  select(Characteristic.Name, Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  count()
+
+samples %>%
+  filter(Characteristic.Name=="Chloride" & Characteristic.MeasurementUnits %in% c("mg/L", "ug/L"))%>%
+  select(Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  summarise(min=min(Characteristic.MeasurementValue), max=max(Characteristic.MeasurementValue))
+
+samples %>%
+  filter(Characteristic.Name=="pH")%>%
+  select(Characteristic.Name, Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  count()
+
+samples %>%
+  filter(Characteristic.Name=="Specific conductance")%>%
+  select(Characteristic.Name, Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  count()
+
+samples %>%
+  filter(Characteristic.Name=="Temperature, water")%>%
+  select(Characteristic.Name, Characteristic.MeasurementUnits, Characteristic.MeasurementValue)%>%
+  group_by(Characteristic.MeasurementUnits)%>%
+  count()
+
+samples$Characteristic.MeasurementUnits=as.character(samples$Characteristic.MeasurementUnits)
+
+# Converts all possible Arsenic and Chloride measurement units to mg/L. If it cannot be converted, it was assumed that it was recorded incorrectly and was then dropped from the data. Data was saved into a new data frame for each analyte.
+arCl.temp=samples%>%
+  filter(Characteristic.Name %in% c("Arsenic","Chloride"))%>%
+  mutate(
+    Characteristic.MeasurementValue=case_when(
+      Characteristic.MeasurementUnits=="ug/L" ~ Characteristic.MeasurementValue/1000,
+      Characteristic.MeasurementUnits=="ppm" ~ Characteristic.MeasurementValue,
+      Characteristic.MeasurementUnits=="ppb" ~ Characteristic.MeasurementValue/1000,
+      Characteristic.MeasurementUnits=="mg/L" ~ Characteristic.MeasurementValue),
+    Characteristic.MeasurementUnits=case_when(
+      Characteristic.MeasurementUnits=="ug/L" ~ "mg/L",
+      Characteristic.MeasurementUnits=="ppm" ~ "mg/L",
+      Characteristic.MeasurementUnits=="ppb" ~ "mg/L",
+      Characteristic.MeasurementUnits=="mg/L" ~ Characteristic.MeasurementUnits))
+
+arCl.temp=arCl.temp%>%
+  filter(!is.na(Characteristic.MeasurementValue))
+
+arsenic=arCl.temp%>%
+  filter(Characteristic.Name=="Arsenic")
+ch.temp=arCl.temp%>%
+  filter(Characteristic.Name=="Chloride")
+
+# Converts all possible pH measurement units to pH. If it cannot be converted, it was assumed that it was recorded incorrectly and was then dropped from the data. Data was saved into a new data frame.
+pH=samples%>%
+  filter(Characteristic.Name == "pH")%>%
+  mutate(
+    Characteristic.MeasurementUnits=case_when(
+      Characteristic.MeasurementUnits=="std units" ~ "pH",
+      Characteristic.MeasurementUnits=="pH" ~ Characteristic.MeasurementUnits))
+
+pH=pH%>%
+  filter(!is.na(Characteristic.MeasurementUnits))
+
+# Converts all possible water temperature measurement units to deg C. If it cannot be converted, it was assumed that it was recorded incorrectly and was then dropped from the data. Data was saved into a new data frame.
+water.temp=samples%>%
+  filter(Characteristic.Name == "Temperature, water")%>%
+  mutate(
+    Characteristic.MeasurementValue=case_when(
+      Characteristic.MeasurementUnits=="deg F" ~ (Characteristic.MeasurementValue-32)*(5/9),
+      Characteristic.MeasurementUnits=="deg C" ~ Characteristic.MeasurementValue),
+    Characteristic.MeasurementUnits=case_when(
+      Characteristic.MeasurementUnits=="deg F" ~ "deg C",
+      Characteristic.MeasurementUnits=="deg C" ~ Characteristic.MeasurementUnits))
+
+water.temp=water.temp%>%
+  filter(!is.na(Characteristic.MeasurementUnits))
+
+# Converts all possible Specific conductance measurement units to uS/cm. If it cannot be converted, it was assumed that it was recorded incorrectly and was then dropped from the data. Data was saved into a new data frame.
+spec.cond=samples%>%
+  filter(Characteristic.Name == "Specific conductance")%>%
+  mutate(
+    Characteristic.MeasurementValue=case_when(
+      Characteristic.MeasurementUnits=="mS/cm" ~ Characteristic.MeasurementValue/1000,
+      Characteristic.MeasurementUnits=="ppb" ~ Characteristic.MeasurementValue/1000,
+      Characteristic.MeasurementUnits=="ppm" ~ Characteristic.MeasurementValue,
+      Characteristic.MeasurementUnits=="ug/L" ~ Characteristic.MeasurementValue/1000,
+      Characteristic.MeasurementUnits=="mg/L" ~ Characteristic.MeasurementValue,
+      Characteristic.MeasurementUnits=="uS/cm @25C" ~ Characteristic.MeasurementValue,
+      Characteristic.MeasurementUnits=="uS/cm" ~ Characteristic.MeasurementValue),
+    Characteristic.MeasurementUnits=case_when(
+      Characteristic.MeasurementUnits=="mS/cm" ~ "uS/cm",
+      Characteristic.MeasurementUnits=="ppb" ~ "ppm",
+      Characteristic.MeasurementUnits=="ppm" ~ Characteristic.MeasurementUnits,
+      Characteristic.MeasurementUnits=="ug/L" ~ "ppm",
+      Characteristic.MeasurementUnits=="mg/L" ~ "ppm",
+      Characteristic.MeasurementUnits=="uS/cm @25C" ~ "uS/cm",
+      Characteristic.MeasurementUnits=="uS/cm" ~ Characteristic.MeasurementUnits))
+
+spec.cond=spec.cond%>%
+  filter(!is.na(Characteristic.MeasurementUnits))
+
+spec.cond=spec.cond%>%
+  mutate(Characteristic.MeasurementValue=case_when(
+    Characteristic.MeasurementUnits=="ppm" & Characteristic.MeasurementValue <=1000 ~ Characteristic.MeasurementValue/.5,
+    Characteristic.MeasurementUnits=="ppm" & (Characteristic.MeasurementValue >= 1001 & Characteristic.MeasurementValue <= 2000) ~ Characteristic.MeasurementValue/.65,
+    Characteristic.MeasurementUnits=="ppm" & Characteristic.MeasurementValue >=2001 ~ Characteristic.MeasurementValue/.75,
+    TRUE ~ Characteristic.MeasurementValue
+  ))
+
+spec.cond=spec.cond%>%
+  mutate(Characteristic.MeasurementUnits=case_when(
+    Characteristic.MeasurementUnits=="ppm" ~ "uS/cm",
+    TRUE ~ Characteristic.MeasurementUnits))
+
+# Combines seperated data frames back into samples data frame to handle outliers/missing cases.
+samples=bind_rows(arsenic, ch.temp, pH, spec.cond, water.temp)
+
+# Removes observations where there is less than 10 observations for a specific analyte at a location.
+samples=samples%>%
+  group_by(FK.MonitoringLocation, Characteristic.Name)%>%
+  filter(n()>10)
+
+# Removes monitoring locations from the monitoring location data set that are no longer in the samples data set.
+removed=setdiff(monLoc$FK.MonitoringLocation, samples$FK.MonitoringLocation)
+monLoc=monLoc%>%
+  filter(!(FK.MonitoringLocation %in% removed))
+```
+
+
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Handling Outliers and Odd Data Points 
+
+
+# Function that takes in the characteristic measurement value and finds if an observation is an outlier or not.
+is_outlier = function(x) {
+  top=abs(x-median(x))
+  MAD=median(abs(x-median(x)))
+  stat=top/MAD
+  outlier=ifelse(stat>5,NA,x)
+  return(outlier)
+}
+
+# Changes the measurement value to NA if the value is an outlier.
+samples=samples%>%
+  group_by(Characteristic.Name, Region, year(Sample.Date))%>%
+  mutate(Characteristic.MeasurementValue=is_outlier(Characteristic.MeasurementValue))
+  
+samples%>%
+  group_by(Characteristic.Name)%>%
+  filter(is.na(Characteristic.MeasurementValue))%>%
+  count()
+
+# Function that takes in the year and the analyte of interest. It then finds the median measurement value of the analyte for that year.
+value.finder = function(xYear, xName) {
+  comp.med = samples %>%
+    group_by(Characteristic.Name) %>%
+    filter(Characteristic.Name == xName, year(Sample.Date) == xYear) %>%
+    summarise(med = median(Characteristic.MeasurementValue, na.rm = TRUE)) %>%
+    pull(med)
+  
+  return(comp.med)
+}
+
+# Creates a vector of computed medians for observations that were marked as outliers and puts them back into the samples data frame.
+samp.out=samples%>%
+  filter(is.na(Characteristic.MeasurementValue))
+out.replace=vector()
+for (i in 1:nrow(samp.out)) {
+    xYear = year(samp.out[[i, "Sample.Date"]])
+    name = samp.out[[i, "Characteristic.Name"]]
+    
+    out.replace[i] = value.finder(xYear, name)
+}
+
+samp.out$Characteristic.MeasurementValue=out.replace
+
+samples=samples%>%
+  filter(!(is.na(Characteristic.MeasurementValue)))
+samples=bind_rows(samples, samp.out)
+```
+
+```{r eval=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Data Exploration
+
+
+samples %>%
+ filter(Characteristic.Name %in% "Arsenic") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ scale_x_continuous(trans = "log") +
+ labs(title = "Arsenic Levels (LOG TRANSFORMATION)") +
+ theme_minimal()
+
+# Shapiro-Wilks test for normality of log transformation of arsenic measurement values.
+samples %>%
+  ungroup()%>%
+  filter(Characteristic.Name=="Arsenic")%>%
+  sample_n(size=5000)%>%
+  summarise(W=shapiro.test(log(Characteristic.MeasurementValue))$statistic,
+            p.val=round(shapiro.test(log(Characteristic.MeasurementValue))$p.value,5),
+            normal=ifelse(p.val<0.05,"no","yes"))
+
+samples %>%
+ filter(Characteristic.Name %in% "Arsenic") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ labs(title = "Arsenic Levels (NO TRANSFORMATION)") +
+ theme_minimal()
+
+samples %>%
+ filter(Characteristic.Name %in% "Chloride") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ labs(title = "Chloride Levels (NO TRANSFORMATION)") +
+ theme_minimal()
+
+samples %>%
+ filter(Characteristic.Name %in% "pH") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ labs(title = "pH Levels (NO TRANSFORMATION)") +
+ theme_minimal()
+
+samples %>%
+ filter(Characteristic.Name %in% "Specific conductance") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ labs(title = "Specific Conductance Levels (NO TRANSFORMATION)") +
+ theme_minimal()
+
+samples %>%
+ filter(Characteristic.Name %in% "Temperature, water") %>%
+ ggplot() +
+ aes(x = Characteristic.MeasurementValue) +
+ geom_histogram(bins = 30L, fill = "#0c4c8a") +
+ labs(title = "Water Temp (NO TRANSFORMATION)") +
+ theme_minimal()
+
+# Shapiro-Wilks test for normality of measurement values.
+samples %>%
+  group_by(Characteristic.Name)%>%
+  sample_n(5000)%>%
+  summarise(W=shapiro.test(Characteristic.MeasurementValue)$statistic,
+            p.val=round(shapiro.test(Characteristic.MeasurementValue)$p.value,5),
+            normal=ifelse(p.val<0.05,"no","yes"))
+```
+
+```{r eval=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Monitoring Location Map
+ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = monLoc, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Region))
+```
+
+## Statistical Methods
+
+All statistical analyses were done in `R` (Version 3.6.3; R Core Team 2020). The `tidyverse` package (Wickham et al., 2019) was used for the cleaning, preparing, manipulation, and graphing of the data.  Other packages used for statistical analyses were: `lubridate` (Version 1.7.8; Garret Grolemund and Hadley Wickham, 2011), `maps` (Version 3.3.0; Richard A. Becker et al. 2018), `mapdata` (Version 2.3.0; Richard A. Becker et al. 2018), and `mblm` (Version 0.12.1; Lukasz Komsta 2019).  A Shapiro-Wilk’s test was used to asses the normality of the analytes. The `mblm()` function was used to assess the trend of each analyte over time for each monitoring location.  A 95% confidence interval was applied to the slope to test if the trend was significant.  All tests were computed at the $\alpha=.05$ level.
+
+## Results
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Results
+
+
+samples$FK.MonitoringLocation=as.factor(samples$FK.MonitoringLocation)
+samples$Sample.Date=as.numeric(samples$Sample.Date)
+t.lev=c("Decrease", "No Change", "Increase")
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### WATER TEMP. LEVELS
+
+
+# Creates a data frame that contains the measurement value slope confidence interval for each monitoring location.
+wt.CI=samples%>%
+  filter(Characteristic.Name=="Temperature, water")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(lowCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,1]],
+            upCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,2]])%>%
+  mutate(lowCI=as.numeric(lowCI),
+         upCI=as.numeric(upCI))
+
+# Creates a data frame that contains the measurement value slope for each monitoring location
+wt.slope=samples%>%
+  filter(Characteristic.Name=="Temperature, water")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(slope=mblm(Characteristic.MeasurementValue~Sample.Date, data=.)$coefficients[[2]])%>%
+  mutate(slope=as.numeric(slope))
+
+# Adds the Latitude, Longitude, and region to the trend data 
+wt.trend=left_join(wt.slope, wt.CI, by="FK.MonitoringLocation")%>%
+  left_join(., monLoc[,c(2,9,10,19)], by="FK.MonitoringLocation")
+wt.trend=wt.trend%>%
+  mutate(Trend=case_when(
+    lowCI<=0 & upCI>=0 ~ "No Change",
+    lowCI<0 & upCI<0 ~ "Decrease",
+    lowCI>0 & upCI>0 ~ "Increase"
+  ))
+
+wt.trend$Trend=factor(wt.trend$Trend, levels = t.lev)
+
+fig1=ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = wt.trend, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Trend, shape=Trend))+
+  scale_shape_manual(values=c(16,4,16))+
+  scale_color_manual(values = c("red","black","blue"))+
+  labs(title = "Water Temperature Trends in Idaho's\nGroundwater", subtitle = "Measurements are taken from 1990-2016.(Deg C)", color="Trend", shape="Trend", caption = "Figure 1")
+
+wt.trend%>%
+  group_by(Trend)%>%
+  count()
+
+tab1.1=wt.trend%>%
+  filter(Trend=="Decrease" | Trend=="Increase")%>%
+  group_by(Region, Trend)%>%
+  arrange(Region, Trend)%>%
+  summarise(Water_Temperature=mean(slope))
+```
+
+Since 1990, of the 845 monitoring locations analyzed for water temperature trends, 23.6% of the locations showed significant evidence of a decrease in water temperature, 19.4% of the locations showed significant evidence of an increase in water temperature, and 57% showed no significant change in water temperature, shown in **Figure 1**.
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+fig1
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### pH LEVELS
+
+
+# Creates a data frame that contains the measurement value slope confidence interval for each monitoring location.
+pH.ci=samples%>%
+  filter(Characteristic.Name=="pH")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(lowCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,1]],
+            upCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,2]])%>%
+  mutate(lowCI=as.numeric(lowCI),
+         upCI=as.numeric(upCI))
+
+# Creates a data frame that contains the measurement value slope for each monitoring location
+pH.slope=samples%>%
+  filter(Characteristic.Name=="pH")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(slope=mblm(Characteristic.MeasurementValue~Sample.Date, data=.)$coefficients[[2]])%>%
+  mutate(slope=as.numeric(slope))
+
+# Adds the Latitude, Longitude, and region to the trend data 
+pH.trend=left_join(pH.slope, pH.ci, by="FK.MonitoringLocation")%>%
+  left_join(., monLoc[,c(2,9,10,19)], by="FK.MonitoringLocation")
+pH.trend=pH.trend%>%
+  mutate(Trend=case_when(
+    lowCI<=0 & upCI>=0 ~ "No Change",
+    lowCI<0 & upCI<0 ~ "Decrease",
+    lowCI>0 & upCI>0 ~ "Increase"
+    ))
+
+pH.trend$Trend=factor(pH.trend$Trend, t.lev)
+
+fig2=ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = pH.trend, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Trend, shape=Trend))+
+  scale_shape_manual(values=c(16,4,16))+
+  scale_color_manual(values = c("red","black","blue"))+
+  labs(title = "pH Level Trends in Idaho's Groundwater", subtitle = "Measurements are taken from 1990-2016.", color="Trend", shape="Trend", caption = "Figure 2")
+
+pH.trend%>%
+  group_by(Trend)%>%
+  count()
+
+tab1.2=pH.trend%>%
+  filter(Trend=="Decrease" | Trend=="Increase")%>%
+  group_by(Region, Trend)%>%
+  arrange(Region, Trend)%>%
+  summarise(pH=mean(slope))
+```
+
+Demonstrated by **Figure 2**, 49.7% of the 656 monitoring locations showed significant evidence of a decreasing trend in pH levels, 9.6% showed significant evidence of an increase in pH levels, and 40.7% showed no significant change in pH levels. 
+
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+fig2
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### ARSENIC LEVELS
+
+
+# Creates a data frame that contains the measurement value slope confidence interval for each monitoring location.
+ar.ci=samples%>%
+  filter(Characteristic.Name=="Arsenic")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(lowCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,1]],
+            upCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,2]])%>%
+  mutate(lowCI=as.numeric(lowCI),
+         upCI=as.numeric(upCI))
+
+# Creates a data frame that contains the measurement value slope for each monitoring location
+ar.slope=samples%>%
+  filter(Characteristic.Name=="Arsenic")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(slope=mblm(Characteristic.MeasurementValue~Sample.Date, data=.)$coefficients[[2]])%>%
+  mutate(slope=as.numeric(slope))
+
+# Adds the Latitude, Longitude, and region to the trend data 
+ar.trend=left_join(ar.slope, ar.ci, by="FK.MonitoringLocation")%>%
+  left_join(., monLoc[,c(2,9,10,19)], by="FK.MonitoringLocation")
+
+ar.trend=ar.trend%>%
+  mutate(Trend=case_when(
+    lowCI<=0 & upCI>=0 ~ "No Change",
+    lowCI<0 & upCI<0 ~ "Decrease",
+    lowCI>0 & upCI>0 ~ "Increase",
+    TRUE ~ "No Change"
+  ))
+
+ar.trend$Trend=factor(ar.trend$Trend, levels = t.lev)
+
+fig3=ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = ar.trend, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Trend, shape=Trend))+
+  scale_shape_manual(values=c(16,4,16))+
+  scale_color_manual(values = c("red","black","blue"))+
+  labs(title = "Arsenic Level Trends in Idaho's Groundwater", subtitle = "Measurements are taken from 1990-2016.(mg/L)", color="Trend", shape="Trend", caption = "Figure 3")
+
+ar.trend%>%
+  group_by(Trend)%>%
+  count()
+
+tab1.3=ar.trend%>%
+  filter(Trend=="Decrease" | Trend=="Increase")%>%
+  group_by(Region, Trend)%>%
+  arrange(Region, Trend)%>%
+  summarise(Arsenic=mean(slope))
+```
+Based on **Figure 3**, 6.2% of the 387 monitoring locations showed significant evidence of a decreasing trend in mg/L of arsenic within the ground water, 16.8% of locations showed significant evidence of an increasing trend of Arsenic, and 77% of locations showed no significant evidence of a change in mg/L of arsenic, in the groundwater.
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+fig3
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### CHLORIDE LEVELS
+
+
+# Creates a data frame that contains the measurement value slope confidence interval for each monitoring location.
+ch.ci=samples%>%
+  filter(Characteristic.Name=="Chloride")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(lowCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,1]],
+            upCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,2]])%>%
+  mutate(lowCI=as.numeric(lowCI),
+         upCI=as.numeric(upCI))
+
+# Creates a data frame that contains the measurement value slope for each monitoring location
+ch.slope=samples%>%
+  filter(Characteristic.Name=="Chloride")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(slope=mblm(Characteristic.MeasurementValue~Sample.Date, data=.)$coefficients[[2]])%>%
+  mutate(slope=as.numeric(slope))
+
+# Adds the Latitude, Longitude, and region to the trend data 
+ch.trend=left_join(ch.slope, ch.ci, by="FK.MonitoringLocation")%>%
+  left_join(., monLoc[,c(2,9,10,19)], by="FK.MonitoringLocation")
+ch.trend=ch.trend%>%
+  mutate(Trend=case_when(
+    lowCI<=0 & upCI>=0 ~ "No Change",
+    lowCI<0 & upCI<0 ~ "Decrease",
+    lowCI>0 & upCI>0 ~ "Increase"
+  ))
+
+ch.trend$Trend=factor(ch.trend$Trend, levels = t.lev)
+
+fig4=ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = ch.trend, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Trend, shape=Trend))+
+  scale_shape_manual(values=c(16,4,16))+
+  scale_color_manual(values = c("red","black","blue"))+
+  labs(title = "Chloride Level Trends in Idaho's Groundwater", subtitle = "Measurements are taken from 1990-2016.(mg/L)", color="Trend", shape="Trend", caption = "Figure 4")
+
+ch.trend%>%
+  group_by(Trend)%>%
+  count()
+
+tab1.4=ch.trend%>%
+  filter(Trend=="Decrease" | Trend=="Increase")%>%
+  group_by(Region, Trend)%>%
+  arrange(Region, Trend)%>%
+  summarise(Chloride=mean(slope))
+```
+
+With respect to the amount of chloride in Idaho’s groundwater(**Figure 4**), 35.5% of the 389 monitoring locations showed significant evidence of a decreasing trend, 23.7% showed significant evidence of an increasing trend, and the remaining 40.9% showed no significant evidence of an increasing or decreasing trend of chloride in the groundwater.
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+fig4
+```
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### SPECIFIC CONDUCTANCE LEVELS
+
+
+# Creates a data frame that contains the measurement value slope confidence interval for each monitoring location.
+spco.ci=samples%>%
+  filter(Characteristic.Name=="Specific conductance")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(lowCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,1]],
+            upCI=confint(mblm(Characteristic.MeasurementValue~Sample.Date, data=.))[[2,2]])%>%
+  mutate(lowCI=as.numeric(lowCI),
+         upCI=as.numeric(upCI))
+
+# Creates a data frame that contains the measurement value slope for each monitoring location
+spco.slope=samples%>%
+  filter(Characteristic.Name=="Specific conductance")%>%
+  group_by(FK.MonitoringLocation)%>%
+  do(slope=mblm(Characteristic.MeasurementValue~Sample.Date, data=.)$coefficients[[2]])%>%
+  mutate(slope=as.numeric(slope))
+
+# Adds the Latitude, Longitude, and region to the trend data 
+spco.trend=left_join(spco.slope, spco.ci, by="FK.MonitoringLocation")%>%
+  left_join(., monLoc[,c(2,9,10,19)], by="FK.MonitoringLocation")
+spco.trend=spco.trend%>%
+  mutate(Trend=case_when(
+    lowCI<=0 & upCI>=0 ~ "No Change",
+    lowCI<0 & upCI<0 ~ "Decrease",
+    lowCI>0 & upCI>0 ~ "Increase"
+  ))
+
+spco.trend$Trend=factor(spco.trend$Trend, levels = t.lev)
+
+fig5=ggplot(data = states, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + 
+  geom_polygon(color = "black", fill = "white")+
+  theme_void()+
+  geom_point(data = spco.trend, mapping = aes(x = LongitudeMeasure, y = LatitudeMeasure, color=Trend, shape=Trend))+
+  scale_shape_manual(values=c(16,4,16))+
+  scale_color_manual(values = c("red","black","blue"))+
+  labs(title = "Specific Conductance Level Trends in\nIdaho's Groundwater", subtitle = "Measurements are taken from 1990-2016.(uS/cm)", color="Trend", shape="Trend", caption = "Figure 5")
+
+spco.trend%>%
+  group_by(Trend)%>%
+  count()
+
+tab1.5=spco.trend%>%
+  filter(Trend=="Decrease" | Trend=="Increase")%>%
+  group_by(Region, Trend)%>%
+  arrange(Region, Trend)%>%
+  summarise(Specific_Conductance=mean(slope))
+```
+
+**Figure 5** demonstrates that 37.5% of the 624 monitoring locations showed significant evidence of a decreasing trend in water conductivity, 26.3% of locations showed significant evidence of an increasing trend, and 36.2% showed no significant evidence of a decreasing or increasing trend in water conductivity.
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+fig5
+```
+
+The average yearly change in an analyte, with respect to trend pattern and region of Idaho, is represented in **Table 1**.
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=FALSE, results='hide', results='hide'}
+tab1=left_join(tab1.1, tab1.2, by=c("Region", "Trend"))%>%
+  left_join(., tab1.3, by=c("Region", "Trend"))%>%
+  left_join(., tab1.4, by=c("Region", "Trend"))%>%
+  left_join(., tab1.5, by=c("Region", "Trend"))
+```
