@@ -1,0 +1,731 @@
+---
+title: "Sound Barrier Testing for Controlling Carp Movement"
+author: "Casey Freimund"
+date: "3/25/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# Loads in Packages
+library(tidyverse)
+library(openxlsx)
+library(chron)
+library(tools)
+library(BSDA)
+library(DescTools)
+library(clinfun)
+```
+
+## Introduction
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Loads in data files
+sides.dat=read.xlsx("Side_change_data.xlsx")
+reaction.dat=read.xlsx("Reaction_data.xlsx", detectDates = TRUE)
+repels.dat=read.xlsx("Repels_data.xlsx")
+sound.dat=read.xlsx("Sound_data.xlsx")
+```
+
+The use of a sound barrier is being tested to discourage carp movement in waterways.  The experiment involved seven experimental units, where each unit had a total of ten fish.  Of our seven units, three consisted of silver carp, two were made up of bighead carp, and our final two units were half silver and half bighead carp.  Each unit was placed in a large tank over the course of three trial days.  Data for the fishes’ movement was recorded at 5 intervals each day and the results of the experiment were recorded into four spread sheets. The purpose of this experiment was to: compare the rates of successful side changes between the control and sound time intervals for each species and the mixed group, compare the rates of successful repels between the species, assess if the successful repels changed over time (are the fish adapting to the sound), and compare reaction times between species and over time.
+
+## Preparing and Cleaning the Data
+
+The side change data recorded information for each control and sound interval. This data set also required some manipulation to allow for the proper use of all the measurements within the dataset, as well as making it consistent with the other datasets.  The date of each trial and time spent in each side of the tank had to be coerced into a date and time for the proper use of date and time computations.  To be consistent with the rest of the data sets, the mixed group trials were changed from “Silver and Bighead Carp” to “Bighead and Silver Carp.”  One experimental unit was given one sound interval for a date, therefore the “inter sound” that was originally recorded was changed to “post sound.” For this same experimental unit, three sound intervals were recorded the next day, and the third sound interval was recorded as “Sound 2,” therefore it was changed to “Sound 3.”  The species and intervals were categorical measurements and were then converted to factors so they would be analyzed properly.  A function was written to count the number of days between each trial to determine what trial day the experimental unit was on, recorded as “trial day.”  Each experimental unit’s trials were held in a consecutive 3-day span, except for one.  This group had a two-day gap between its second and third trial day, and the written function didn’t account for this two-day gap, so it had to be changed manually.  The trial day was then converted to a factor due to it being a categorical variable.  There was a single observation where the number of successful crossings was greater than the number of attempted crossings.  To resolve this issue, the same trial and time interval was found in the repels dataset and the number of successful crossings and attempted crossings in the side change data was changed to match the repels data.  The number of successful crossings per minute was also recalculated after this change.  A repels column was created by subtracting the number of successful crossings from the number of attempted crossings for each interval.  This column was then used to create a repel success rate column that measured the number of repels over the number of attempted crossings for each interval.  A final column was added that labels the pre, inter, and post sound intervals as “control” and the sound intervals as “sound.”  The intervals were also refactored into chronological order so, when graphed, the intervals would appear in order.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Side change data
+
+# converts date column to read like dates and allow for date computations and converts both time columns to read like times to allow for time computations. Also capitalizes all first letters in species column for consistency of data.
+sides.dat=sides.dat %>% 
+  mutate(Date=convertToDate(Date), Time.North=chron(times. = Time.North), Time.South=chron(times. = Time.South), Species=toTitleCase(Species))
+
+sides.dat=sides.dat%>%
+  mutate(Species=case_when(Species == "Silver and Bighead Carp" ~ "Bighead and Silver Carp",
+                           Species == "Silver Carp" ~ "Silver Carp",
+                           Species == "Bighead Carp" ~ "Bighead Carp"))
+
+# Only 1 sound was played for this observation day.
+sides.dat[71,"Interval"]="Post sound"
+
+# one school of fish was given 3 sound intervals in one day.
+sides.dat[77,"Interval"]="Sound 3"
+
+# converts species and intervals to factors
+sides.dat=sides.dat %>%
+  mutate(Species=as.factor(Species), Interval=as.factor(Interval))
+
+# Function that takes in a data frame, "x", and measures the differences in dates between observations i and i-1 to determine the trial day for a school of fish, returns dataframe "x". 
+#   -If the difference in dates equals 0, then trial days are the same for both observations.
+#   -if the difference in dates equals 1, then it is the next trial day with the given school of fish.
+#   -if the difference in dates is greater than 1, then it is recorded as a first trial day with a new school of fish.
+trial.fun=function(x) {
+  j = 1
+  x[1, "trial.day"] = j
+  for (i in 2:nrow(x)) {
+    day.cur = x[i, "Date"]
+    day.prev = x[i - 1, "Date"]
+    if (day.cur - day.prev < 1) {
+      x[i, "trial.day"] = j
+    }
+    else if (day.cur - day.prev == 1) {
+      j = j + 1
+      x[i, "trial.day"] = j
+    }
+    else{
+      j = 1
+      x[i, "trial.day"] = j
+    }
+  }
+  return(x)
+}
+
+# creates a column that shows what trial day a single school of fish is on.
+sides.dat=trial.fun(sides.dat)
+
+# changes a set of observations where the 3rd trial day for 1 school of fish was more than 1 day away from previous trial day. trial.fun didn't account for this
+sides.dat[64:68,"trial.day"]=3
+
+sides.dat$trial.day=as.factor(sides.dat$trial.day)
+
+# creats a repels column to indicate how many times the fish were repelled.
+sides.dat=sides.dat %>%
+  mutate(repels=Attempted.Crossings - Successful.crossings)
+
+# changes a specific observation where repels was negative because successful crossings was greater than attempted crossings.  Found same observation in repels.dat to find actual amount of successful crosses, attempts and repels.
+sides.dat[sides.dat$repels<0,]
+
+repels.dat %>%
+  filter(Group=="SVC3",Sound==4)
+
+sides.dat[34,"Successful.crossings"]=1
+sides.dat[34, "Succ.Cross.per.minute"]=1/30
+
+# creates a column that measures number of repels
+sides.dat=sides.dat %>%
+  mutate(repels=Attempted.Crossings - Successful.crossings)
+
+# creates a column that measures the success rate of the sound: repels/Attempted.Crossings
+sides.dat=sides.dat %>%
+  mutate(success.rate=repels/Attempted.Crossings)
+
+# Refactors the interval variable so it appears in order of happening when graphed.
+sides.dat=sides.dat%>%
+  mutate(Interval = fct_relevel(Interval, 
+            "Pre Sound", "Sound 1", "Inter sound", 
+            "Sound 2", "Post sound"))
+
+levels(sides.dat$Interval)
+
+sides.dat=sides.dat%>%
+  mutate(experiment=case_when(Interval %in% c("Pre Sound", "Inter sound", "Post sound") ~ "Control",
+                              Interval %in% c("Sound 1", "Sound 2", "Sound 3") ~ "Sound"))
+
+summary(sides.dat)
+```
+
+For the sound data set, the sound pressure level within the tank was recorded at every x and y coordinate within the tank. Each x coordinate had seven sound pressure levels recorded, except for one.  There was a single record for the x coordinate of 4.5 and only six records at the coordinate 5.5.  Due to the consistency in the rest of the data, the single x coordinate of 4.5 was changed to 5.5.  The reaction data set recorded how many seconds it took for the fish to react to the sound. This data set also required very little manipulation.  The way the experimental units were labeled was changed to match the side change data set and was then converted to a factor.  An additional column was then added using the trial day function to record the trial day a group of fish was on.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Sound Data
+
+# Changes a single x value to 4.5 because each x value is recorded 7 times, except for 5.5 which is only recorded 6 times. The value being changed was originally recorded as 5 and that is the only x value recorded as 5.
+sound.dat[43,"x"]=5.5
+
+
+### Reaction Data
+
+# converts species to a factor
+reaction.dat=reaction.dat %>%
+  mutate(Species=as.factor(toTitleCase(Species)))
+
+# creates a column that shows what trial day a single school of fish is on.
+reaction.dat=trial.fun(reaction.dat)
+reaction.dat$trial.day=as.factor(reaction.dat$trial.day)
+
+summary(reaction.dat)
+```
+
+In the repels data set, the number of repels and crossing attempts for each experimental unit at each sound interval was recorded.  In this data set, two additional columns were added.  The first column recorded the species of each fish based on their experimental group.  For example, SVC 1, 2, and 3 were recorded as silver carp, BHC 1 and 2 were recorded as bighead carp, and MG 1 and 2 were recorded as bighead and silver carp.  The second column added was the success rate of the sound interval.  The success rate was computed by dividing the number of repels over the number of crossing attempts for each sound interval.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Repels Data
+
+# converts sound and group to a factor
+repels.dat=repels.dat %>%
+  mutate(Sound=as.factor(Sound), Group=as.factor(Group))
+
+# creates a species column and records the species for each observation fish depending on the group's id.
+repels.dat=repels.dat %>%
+  mutate(species=as.factor(case_when(Group %in% c("SVC1", "SVC2" ,"SVC3") ~ "Silver Carp",
+                           Group %in% c("BHC1", "BHC2") ~ "Bighead Carp",
+                           Group %in% c("MG1", "MG2") ~ "Bighead and Silver Carp")))
+
+# creates a column that measures the success rate of the sound: Repels/Crossing.attempts
+repels.dat=repels.dat %>%
+  mutate(success.rate=Repels/Crossing.attempts)
+
+summary(repels.dat)
+```
+
+A final data frame was created, called ‘daily.dat,’ that consisted of data from just the sound intervals for the whole day.  The reaction times from the reaction data set were used to compute the average and median reaction times, in seconds, for the day’s sound intervals.  The daily data set contained total crossing attempts and total repels that were pulled from the side change data set and a success rate was computed for each days’ experiment.  A trial day was also recorded for each experimental unit using the same function that was used on the side change data.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+### Daily Data
+
+# Creates a data frame of Date, Species, Average Reaction Time, and Median Reaction Times for each Interval,  
+react.temp=reaction.dat %>%
+  group_by(Date, Species) %>%
+  summarise(avg.reaction.time=mean(Reaction.seconds), med.reaction=median(Reaction.seconds))
+
+side.temp=sides.dat %>%
+  filter(Interval %in% c("Sound 1", "Sound 2"))%>%
+  group_by(Date, Species)%>%
+  summarise(Total.Attempts=sum(Attempted.Crossings), Total.Repels=sum(repels))
+
+daily.dat=inner_join(react.temp, side.temp)
+
+daily.dat=daily.dat%>%
+  mutate(success.rate=Total.Repels/Total.Attempts)
+
+daily.dat=trial.fun(daily.dat)
+daily.dat[14,"trial.day"]=3
+daily.dat$trial.day=as.factor(daily.dat$trial.day)
+```
+
+## Data Exploration
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+### SOUNDS.DAT
+
+dir.dat=data.frame(directions=c("North","South","East","West"),xpos=c(10,0,5,5),ypos=c(2.5,2.5,0,5))
+
+ggplot(sound.dat) +
+  aes(x = x, y = y) +
+  geom_tile(width = 1, aes(fill = SPL, colour = SPL)) +
+  scale_fill_viridis_c(option = "inferno") +
+  scale_color_viridis_c(option = "inferno") +
+  labs(
+    x = "",
+    y = "",
+    title = "Sound Pressure Levels in Pond",
+    fill = "Sound Pressure Level (dB)",
+    color = "Sound Pressure Level (dB)"
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")+
+  geom_text(data=dir.dat,aes(x=xpos, y=ypos,label=directions),col="white",size=5)
+```
+
+The purpose of this experiment is to first test for a difference in the rate of successful crossings for each group of fish.  Due to the control intervals being longer in duration than the sound intervals, it was determined that looking at the number of successful crossings per minute would provide us with the most accurate results.  Within each group of species, there appears to be a difference in the number of crossings per minute between the control and sound intervals (Figure 1).  More specifically, the sound intervals appear to show less successful crossing attempts per minute, with some trials having 0 successful crosses.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# SIDES.DAT
+
+# Boxplot of Control and Sound groups
+ggplot(sides.dat) +
+ aes(x = experiment, y = Successful.crossings) +
+ geom_boxplot(fill = "#0c4c8a") +
+ theme_minimal() +
+ facet_wrap(vars(Species))
+
+ggplot(sides.dat) +
+ aes(x = experiment, y = Attempted.Crossings) +
+ geom_boxplot(fill = "#0c4c8a") +
+ theme_minimal() +
+ facet_wrap(vars(Species))
+
+### Mixed Groups
+# Successful Crossing per Minute
+sides.dat %>%
+ filter(Species %in% "Bighead and Silver Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Succ.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings per Minute Across Trial Days", subtitle = "Mixed Group") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Attempted Crossings per Minute all Intervals
+sides.dat %>%
+ filter(Species %in% "Bighead and Silver Carp") %>%
+ filter(!(Interval %in% 
+    "Sound 3")) %>%
+ ggplot() +
+ aes(x = Interval, y = Att.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Attempted Crossings per Minute Mixed Goup") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Successful Crossings
+sides.dat %>%
+ filter(Species %in% "Bighead and Silver Carp") %>%
+ filter(!(Interval %in% 
+    "Sound 3")) %>%
+ ggplot() +
+ aes(x = Interval, y = Successful.crossings) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings for Mixed Group") +
+ theme_minimal()
+
+### Silver Carp
+# Successful Crossings per Minute
+sides.dat %>%
+ filter(Species %in% "Silver Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Succ.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings per Minute Across Trial Days", subtitle = "Silver Carp") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Attempted Crossings per Minute all Intervals
+sides.dat %>%
+ filter(Species %in% "Silver Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Att.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Attempted Crossings per Minute Silver Carp") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Successful Crossings
+sides.dat %>%
+ filter(Species %in% "Silver Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Successful.crossings) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings for Silver Carp") +
+ theme_minimal()
+
+### Big Head Carp
+# Successful Crossings per Minute
+sides.dat %>%
+ filter(Species %in% "Bighead Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Succ.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings per Minute Across Trial Days", subtitle = "Bighead Carp") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Attempted Crossings per Minute all Intervals
+sides.dat %>%
+ filter(Species %in% "Bighead Carp") %>%
+ ggplot() +
+ aes(x = Interval, y = Att.Cross.per.minute) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Attempted Crossings per Minute Bighead Carp") +
+ theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+ facet_wrap(vars(trial.day))
+
+# Successful Crossings
+sides.dat %>%
+ filter(Species %in% "Bighead Carp") %>%
+ filter(!(Interval %in% "Sound 3")) %>%
+ ggplot() +
+ aes(x = Interval, y = Successful.crossings) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Successful Crossings for Bighead Carp") +
+ theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.align='center'}
+fig.1=ggplot(sides.dat) +
+ aes(x = experiment, y = Succ.Cross.per.minute, fill=Species) +
+ geom_boxplot() +
+ theme_minimal() +
+ theme(legend.position = "none") +
+ facet_wrap(vars(Species)) +
+ labs(x="Treatment", y="Successful Crossings per Minute",title = "Successful Crossings per Minute for Control vs\nSound Intervals", caption = "Figure 1") +
+ scale_fill_brewer(palette = "Set2")
+
+fig.1
+```
+
+From here, the experiment looked at the success rate of the repels between the species.  The purpose of comparing successful repels between the species allows the experiment to determine if the sound only works better on one species of carp compared to the other.  Based on Figure 2, there appears to be a difference in the rate of successful repels between the individual species. Since carp travel in schools, by comparing the mixed group with the individual species, it can be determined if one group being less deterred by the sound would have greater influence on the species that is more bothered by the sound, or vice versa.  Based on the graph below, there does appear to be some influence happening in our mixed group, because the mixed group has a relatively high rate of successful repels compared to the silver carp groups.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# REPELS.DAT
+
+# Boxplot for Crossing Attempts
+ggplot(repels.dat) +
+ aes(x = Sound, y = Crossing.attempts) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Crossing Attempts for Each Fish Across Sound") +
+ theme_minimal() +
+ facet_wrap(vars(species))
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.align='center'}
+fish.labs = c("Bighead and Silver Carp\n(n=2)", "Bighead Carp\n(n=2)", "Silver Carp\n(n=3)")
+names(fish.labs) = c("Bighead and Silver Carp", "Bighead Carp", "Silver Carp")
+
+# Boxplot for Success Rates
+fig.2=ggplot(repels.dat) +
+ aes(x = Sound, y = success.rate, fill=species) +
+ geom_boxplot()  +
+ theme_minimal() +
+ theme(legend.position = "none") +
+ facet_wrap(vars(species), labeller = labeller(species=fish.labs))+
+ labs(x="Sound Interval", y="Repel Success Rate of Sound",title = "Repel Success Rate Across Sound Intervals for Fish", caption = "Figure 2") +
+ scale_fill_brewer(palette = "Set2")
+
+fig.2
+```
+
+If the fish were starting to adapt to the sound, the more the fish are exposed to the sound, the lower the repel rates would be.  This would suggest that Figure 2 would show a relatively high repel rate at sound 1 and the repel rate would drop either slightly or substantially as the fish approached their 6th time hearing the sound.  For the bighead carp, there doesn’t appear to be a downward trend in the repel rates, but the silver carp and mixed group might be adapting to the sound.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# DAILY.DAT
+
+# Boxplot for Average Reaction Times
+ggplot(daily.dat) +
+ aes(x = trial.day, y = avg.reaction.time) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Average Reaction Times") +
+ theme_minimal() +
+ facet_wrap(vars(Species))
+
+# Dot plot Reaction time against Total Repels
+ggplot(daily.dat) +
+ aes(x = Total.Repels, y = avg.reaction.time, colour = Species) +
+ geom_point(size = 3L) +
+ scale_color_hue() +
+ labs(title = "Average Reaction Time against Total Repels") +
+ theme_minimal()
+
+# Avg reaction time by trial day Density Plot
+ggplot(daily.dat) +
+ aes(x = avg.reaction.time, fill = trial.day) +
+ geom_density(adjust = 1L, alpha=.5) +
+ scale_fill_hue() +
+ labs(title = "Average Reaction Time by Trial Day") +
+ theme_minimal()
+
+# Box plot of Avg. Reaction time by Trial Day and Fish with FREE Y AXIS
+ggplot(daily.dat) +
+ aes(x = trial.day, y = avg.reaction.time) +
+ geom_boxplot(fill = "#0c4c8a") +
+ scale_fill_hue() +
+ labs(title = "Average Reaction Time by Trial Day and Fish") +
+ theme_minimal() +
+ facet_wrap(vars(Species), scales = "free_y")
+
+# Avg. Reaction Time vs Success Rate
+ggplot(daily.dat) +
+ aes(x = success.rate, y = avg.reaction.time, colour = Species) +
+ geom_point(size = 2L) +
+ scale_color_hue() +
+ labs(title = "Average Reaction Time Against Success Rate by Fish") +
+ theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.align='center'}
+# Boxplot for Median Reaction Times
+fig.3=ggplot(daily.dat) +
+ aes(x = trial.day, y = med.reaction, fill=Species) +
+ geom_boxplot() +
+ theme_minimal() +
+ theme(legend.position = "none") +
+ facet_wrap(vars(Species),labeller = labeller(Species=fish.labs))+
+ labs(x="Trial Day", y="Median Reaction Times", title = "Median Reaction Times Across Trial Days", caption = "Figure 3") +
+ scale_fill_brewer(palette = "Set2")
+
+fig.3
+```
+
+The reaction times of each species varied substantially.  In some trials, when the fish approached the sound barrier, they would turn away immediately, resulting in a reaction time of 1 second.  In other trials, fish would take more than 10 seconds to turn away, with one trial not turning away for 56 seconds.  To ensure the results wouldn’t be influenced by any outliers, the median reaction times for each fish were compared.  Based on the results of the experiment, silver carp appear to be bothered the least by the sound barrier (Figure 3).  Not only are the silver carps’ median reaction times substantially greater than the other groups’ reaction times, noted by the spread of reaction times in Figure 4, but they also appear to take longer to react to the sound as the trials progress.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# REACION.DAT
+
+# Silver Carp Reaction Times
+reaction.dat %>%
+ filter(Species %in% "Silver Carp") %>%
+ ggplot() +
+ aes(x = trial.day, y = Reaction.seconds) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Silver Carp Reaction Time Across Trial Days") +
+ theme_minimal()
+
+# Bighead Carp Reaction Times
+reaction.dat %>%
+ filter(Species %in% "Bighead Carp") %>%
+ ggplot() +
+ aes(x = trial.day, y = Reaction.seconds) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Bighead Carp Reaction Time Across Trial Days") +
+ theme_minimal()
+
+# Mixed Group Reaction Times
+reaction.dat %>%
+ filter(Species %in% "Bighead and Silver Carp") %>%
+ ggplot() +
+ aes(x = trial.day, y = Reaction.seconds) +
+ geom_boxplot(fill = "#0c4c8a") +
+ labs(title = "Mixed Group Reaction Time Across Trial Days") +
+ theme_minimal()
+
+# DATA AS A WHOLE
+ggplot(reaction.dat) +
+ aes(x = Reaction.seconds, fill = trial.day) +
+ geom_density(adjust = 1L, alpha=.5) +
+ scale_fill_hue() +
+ labs(title = "Reaction Seconds for All Fish") +
+ theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.width=7, fig.height=7, fig.align='center'}
+
+fish.labs=c("Bighead and\nSilver Carp", "Bighead Carp", "Silver Carp")
+names(fish.labs)=c("Bighead and Silver Carp", "Bighead Carp", "Silver Carp")
+
+fig.4=ggplot(reaction.dat) +
+ aes(x = Reaction.seconds, fill = trial.day) +
+ geom_density(adjust = 1L, alpha=0.25) +
+ scale_fill_hue() +
+ labs(x = "Reaction Time (seconds)", y = "Density", title = "Reaction Time to Sound", caption = "Figure 4", fill = "Trial Day") +
+ theme_minimal() +
+ theme(legend.position = "top") +
+ facet_grid(rows=vars(Species), labeller = labeller(Species=fish.labs))
+
+
+fig.4
+```
+
+## Statistical Methods
+
+All statistical analyses were done in `R` (Version 3.6.3; R Core Team 2020). The `tidyverse` package (Wickham et al., 2019) was used for the cleaning, preparing, manipulation, and graphing of the data.  Other packages used for statistical analyses were: `chron` (Version 2.3-54; David James and Kurt Hornik 2019), `BSDA` (Version 1.2.0; Alan T. Arnholt and Ben Evans 2017), `DescTools` (Version 0.99.32; Andri Signorell et al. 2020), and `clinfun` (Version 1.0.15; Venkatraman E. Seshan 2018).  A Shapiro Wilks test was used to assess if the successful side changes per minute and the median reaction times were normally distributed for each fish species. A Kolmogorov-Smirnov test was used to test the similarities in the distributions for successful crosses per minute between the control and sound trials for each group of fish.  The Sign test was applied to test the differences in successful crosses per minute for the control and sound groups.  The Kruskal Wallis test was used to determine if the repel rates and the reaction times differed between the species.  A Jonchkeere-Terpstra test was applied to the number of successful crosses per minute of the sound trials and the trial days to determine if the number of successful crossings increased per interval or day.  All tests were performed at the $\alpha=.05$ level.
+
+## Results
+
+The number of successful crossings per minute for comparing the control and sound trials for silver carp $(S=12, p=0.035)$, bighead carp $(S=11, p=0.006)$, and mixed group $(S=9, p=0.021)$ were all significantly different. Based on these tests, and on Figure 1, the fish appear to be crossing successfully more frequently in the control trials than the sound trials.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', error=TRUE, eval=FALSE}
+### Successful side changes between control & sound trials within fish species, using Successful Crossings per Minute
+
+# Checking for Normality
+sides.dat %>%
+  group_by(Species,experiment)%>%
+  summarise(W=shapiro.test(Succ.Cross.per.minute)$statistic,
+            p.val=round(shapiro.test(Succ.Cross.per.minute)$p.value,5),
+            normal=ifelse(p.val<0.05,"no","yes"))
+
+# Creats 2 vectors for each fish, each vector contains the number of successful crosses per minute. A KS test was used to check for distribution similarity.
+mixed.control=sides.dat%>%
+  filter(Species=="Bighead and Silver Carp",experiment=="Control",Interval %in% c("Pre Sound", "Post sound"))%>%
+  pull(Succ.Cross.per.minute)
+mixed.sound=sides.dat%>%
+  filter(Species=="Bighead and Silver Carp",experiment=="Sound")%>%
+  pull(Succ.Cross.per.minute)
+
+ks.test(mixed.sound,mixed.control)
+
+silver.control=sides.dat%>%
+  filter(Species=="Silver Carp",experiment=="Control", Interval %in% c("Pre Sound", "Post sound"))%>%
+  pull(Succ.Cross.per.minute)
+silver.sound=sides.dat%>%
+  filter(Species=="Silver Carp",experiment=="Sound")%>%
+  pull(Succ.Cross.per.minute)
+
+ks.test(silver.sound,silver.control)
+
+bh.control=sides.dat%>%
+  filter(Species=="Bighead Carp",experiment=="Control", Interval %in% c("Pre Sound", "Post sound"))%>%
+  pull(Succ.Cross.per.minute)
+
+bh.sound=sides.dat%>%
+  filter(Species=="Bighead Carp",experiment=="Sound")%>%
+  pull(Succ.Cross.per.minute)
+
+# A second sound trial was missing so I added 1 mean Successful Crosses per Minute so our control and sound observations were equal.
+bh.sound.avg=mean(bh.sound)
+bh.sound=append(bh.sound, bh.sound.avg)
+
+ks.test(bh.sound,bh.control)
+
+# Graphically checking normality and distribution similarities
+sides.dat %>%
+ filter(Species %in% "Silver Carp") %>%
+ ggplot() +
+ aes(x = Succ.Cross.per.minute, fill = experiment, colour = experiment) +
+ geom_density(adjust = 1L,alpha=0.5) +
+ scale_fill_hue() +
+ scale_color_hue() +
+ labs(title = "Silver Carp") +
+ theme_minimal()
+
+sides.dat %>%
+ filter(Species %in% "Bighead Carp") %>%
+ ggplot() +
+ aes(x = Succ.Cross.per.minute, fill = experiment, colour = experiment) +
+ geom_density(adjust = 1L, alpha=0.5) +
+ scale_fill_hue() +
+ scale_color_hue() +
+ labs(title = "Bighead Carp") +
+ theme_minimal()
+
+sides.dat %>%
+ filter(Species %in% "Bighead and Silver Carp") %>%
+ ggplot() +
+ aes(x = Succ.Cross.per.minute, fill = experiment, colour = experiment) +
+ geom_density(adjust = 1L, alpha=0.5) +
+ scale_fill_hue() +
+ scale_color_hue() +
+ labs(title = "Mixed Group") +
+ theme_minimal()
+
+# SIGN TESTS
+SIGN.test(silver.control,silver.sound)
+# wilcox.test(silver.control,silver.sound)
+
+SIGN.test(bh.control,bh.sound)
+# wilcox.test(bh.control,bh.sound)
+
+SIGN.test(mixed.control,mixed.sound)
+# wilcox.test(mixed.control,mixed.sound)
+```
+
+The median successful repel rates between the three groups of fish were not significantly different (Kruskal-Wallis, $\chi^2 = 2.451, df=2, p=0.294$).
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', error=TRUE, eval=FALSE}
+### Successful repels between species
+
+# Creates a dataframe for all successful repels per minute during sound trial
+succ.repel.all=sides.dat %>%
+  filter(Interval %in% c("Sound 1", "Sound 2")) %>%
+  group_by(Species) %>%
+  select(Species, success.rate)
+
+kruskal.test(success.rate~Species, data=succ.repel.all)
+
+ggplot(succ.repel.all) +
+ aes(x = Species, y = success.rate) +
+ geom_boxplot(fill = "#0c4c8a") +
+ theme_minimal()
+```
+
+There was not enough statistical evidence to say that the silver carp are adapting to the sound across sound intervals within the same day $(JT=6, p=0.347)$, or across the trial days $(JT=8, p=0.292)$.  The bighead carp showed no significance in adapting to the sound between the intervals $(JT=6, p=0.358)$, or across the trial days $(JT=3, p=0.937)$.  The mixed group also showed no significant evidence of adapting to the sound between the sound intervals $(JT=4.5 ,p=0.592)$, and across trial days $(JT=8.5 ,p=0.209)$. 
+
+```{r echo=FALSE, error=TRUE, message=FALSE, warning=FALSE, results='hide', eval=FALSE}
+# Learning
+
+# Silver
+silver.learning=sides.dat%>%
+  filter(Species=="Silver Carp", Interval %in% c("Sound 1", "Sound 2"))%>%
+  mutate(trial.day=as.numeric(trial.day),Interval=as.numeric(case_when(Interval=="Sound 1"~1, Interval=="Sound 2"~2)))%>%
+  group_by(trial.day, Interval)%>%
+  summarise(avg.succ.per.min=mean(Succ.Cross.per.minute))
+
+jonckheere.test(x=silver.learning$avg.succ.per.min, g=silver.learning$Interval,alternative = c("increasing"), nperm=10000)
+jonckheere.test(x=silver.learning$avg.succ.per.min, g=silver.learning$trial.day, alternative = c("increasing"), nperm=10000)
+
+# Bighead
+bh.learning=sides.dat%>%
+  filter(Species=="Bighead Carp", Interval %in% c("Sound 1", "Sound 2"))%>%
+  mutate(trial.day=as.numeric(trial.day),Interval=as.numeric(case_when(Interval=="Sound 1"~1, Interval=="Sound 2"~2)))%>%
+  group_by(trial.day, Interval)%>%
+  summarise(avg.succ.per.min=mean(Succ.Cross.per.minute))
+
+jonckheere.test(x=bh.learning$avg.succ.per.min, g=bh.learning$Interval, alternative = c("increasing"), nperm=10000)
+jonckheere.test(x=bh.learning$avg.succ.per.min, g=bh.learning$trial.day, alternative = c("increasing"), nperm=10000)
+
+# Mixed
+mixed.learning=sides.dat%>%
+  filter(Species=="Bighead and Silver Carp", Interval %in% c("Sound 1", "Sound 2"))%>%
+  mutate(trial.day=as.numeric(trial.day),Interval=as.numeric(case_when(Interval=="Sound 1"~1, Interval=="Sound 2"~2)))%>%
+  group_by(trial.day, Interval)%>%
+  summarise(avg.succ.per.min=mean(Succ.Cross.per.minute))
+
+jonckheere.test(x=mixed.learning$avg.succ.per.min, g=mixed.learning$Interval, alternative = c("increasing"), nperm=10000)
+jonckheere.test(x=mixed.learning$avg.succ.per.min, g=mixed.learning$trial.day, alternative = c("increasing"), nperm=10000)
+```
+
+By comparing the median reaction times, in seconds, between the species: silver and bighead carp $(W=14, p=0.209)$, silver carp and the mixed group $(W=8.5, p=0.101)$, and bighead carp and the mixed group $(W=10, p=0.335)$, showed no significant difference in median reaction times when responding to the sound.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', error=TRUE, eval=FALSE}
+### Reaction times between species
+
+# Checking for Normality
+daily.dat %>%
+  group_by(Species)%>%
+  summarise(W=shapiro.test(med.reaction)$statistic,
+            p.val=round(shapiro.test(med.reaction)$p.value,5),
+            normal=ifelse(p.val<0.05,"no","yes"))
+
+ggplot(daily.dat) +
+ aes(x = med.reaction, fill = Species) +
+ geom_density(adjust = 1L, alpha=0.5) +
+ scale_fill_hue() +
+ theme_minimal()
+
+ggplot(daily.dat) +
+ aes(x = Species, y = med.reaction) +
+ geom_boxplot(fill = "#0c4c8a") +
+ theme_minimal()
+
+kruskal.test(med.reaction~Species, data=daily.dat)
+
+# Silver and Bighead comparison
+sil.bh=daily.dat %>%
+  filter(Species %in% c("Silver Carp", "Bighead Carp"))
+wilcox.test(med.reaction~Species, data=sil.bh)
+
+# Silver and Mixed Group comparisonn
+sil.mix=daily.dat %>%
+  filter(Species %in% c("Silver Carp", "Bighead and Silver Carp"))
+wilcox.test(med.reaction~Species, data = sil.mix)
+
+# Bighead and Mixed Group comparisonn
+bh.mix=daily.dat %>%
+  filter(Species %in% c("Bighead Carp", "Bighead and Silver Carp"))
+wilcox.test(med.reaction~Species, data = bh.mix)
+```
+
+Within each species, there was no significant difference in the median reaction times for the three trial days for the silver carp (Kruskal-Wallis, $\chi^2 = 1.111, df=2, p=0.574$), bighead carp (Kruskal-Wallis, $\chi^2 = 2.5, df=2, p=0.287$), or the mixed group (Kruskal-Wallis, $\chi^2 = 2.333, df=2, p=0.311$).
+
+In conclusion, it appears that a sound barrier is an effective method in deterring invasive carp from entering waterways.  Not only does the sound barrier discourage various groups of carp, but the carp aren’t adapting to the sound, which would make it an effective long-term solution. 
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', error=TRUE}
+### Reaction times over time
+
+# Silver
+sil.ROT=daily.dat %>%
+  filter(Species=="Silver Carp")%>%
+  mutate(trial.day=as.numeric(trial.day))%>%
+  group_by(trial.day)%>%
+  select(trial.day, avg.reaction.time, med.reaction)
+
+kruskal.test(med.reaction~trial.day, data=sil.ROT)
+kruskal.test(avg.reaction.time~trial.day, data=sil.ROT)
+
+# Bighead
+bh.ROT=daily.dat %>%
+  filter(Species=="Bighead Carp")%>%
+  mutate(trial.day=as.numeric(trial.day))%>%
+  group_by(trial.day)%>%
+  select(trial.day, avg.reaction.time, med.reaction)
+
+kruskal.test(med.reaction~trial.day, data=bh.ROT)
+kruskal.test(avg.reaction.time~trial.day, data=bh.ROT)
+
+# Mixed Group
+mixed.ROT=daily.dat %>%
+  filter(Species=="Bighead and Silver Carp")%>%
+  mutate(trial.day=as.numeric(trial.day))%>%
+  group_by(trial.day)%>%
+  select(trial.day, avg.reaction.time, med.reaction)
+
+kruskal.test(med.reaction~trial.day, data=mixed.ROT)
+kruskal.test(avg.reaction.time~trial.day, data=mixed.ROT)
+```
