@@ -1,0 +1,471 @@
+---
+title: "Monitoring Largemouth Bass Morphometrics"
+author: "Casey Freimund"
+date: "5/4/2020"
+output: word_document
+---
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# Loads packages
+library(dplyr)
+library(lubridate)
+library(GGally)
+library(mice)
+library(EnvStats)
+library(boot)
+library(clinfun)
+library(dunn.test)
+```
+
+## Introduction
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+# Loads Dataset
+fish.dat=read.csv("ltrm_fish_data.csv", header = TRUE)
+```
+
+The Long Term Resource Monitoring (LTRM) program performs standardized monitoring of the different constituents within the upper Mississippi River System.  One of which, the biotic constituent, consists of the fish that live in the Mississippi River’s ecosystem.  Fish are an important part to the Mississippi River System, because they often affect other elements within their ecosystem, such as other biota.  The importance of monitoring and researching fish allows the LTRM to detect adverse trends within the ecosystem and take actions when needed.  The purpose of this analysis is to detect if there are any morphometric changes in the community of largemouth bass over time.  In particular, to find if the relationship between length and weight for largemouth bass is changing over time.  The data collected for this analysis was taken from Lake Onalaska between 1990 and 2019 and was grouped by the decade in which they were observed.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+#### Data Manipulation and Cleaning
+
+# Changes date variable to act like a date.
+fish.dat$fdate=as_date(as.character(fish.dat$fdate), format="%m/%d/%y")
+fish.dat$sdate=as_date(as.character(fish.dat$sdate), format="%m/%d/%y")
+
+summary(fish.dat[,c("fdate", "secchi", "temp", "depth", "cond", "current", "length", "weight")])
+
+# If fdate is missing, it was replaced with that observations sdate.
+fish.dat=fish.dat%>%
+  mutate(fdate=case_when(
+    is.na(fdate) ~ sdate,
+    TRUE ~ fdate
+  ))
+
+# Replaces relevant NA values with median secchi measurement, conductivity, and current for that observation's month/year combination. 
+fish.dat=fish.dat%>%
+  group_by(year(fdate), month(fdate))%>%
+  mutate(
+    secchi=case_when(
+      is.na(secchi) ~ mean(secchi, na.rm = TRUE),
+      TRUE ~ as.numeric(secchi)),
+    
+    cond=case_when(
+    is.na(cond) ~ mean(cond, na.rm = TRUE),
+    TRUE ~ as.numeric(cond)),
+    
+    current=case_when(
+      is.na(current) ~ mean(current, na.rm = TRUE),
+      TRUE ~ as.numeric(current))
+  )
+
+# Replaces NA values with water depth equal to the water depth of same batch number.
+fish.dat=fish.dat%>%ungroup()
+fish.dat=fish.dat%>%
+  group_by(batchno)%>%
+  mutate(depth=case_when(
+    is.na(depth) ~ mean(depth, na.rm = TRUE),
+    TRUE ~ depth
+  ))
+fish.dat=fish.dat%>%ungroup()
+summary(fish.dat$catch)
+
+fish=fish.dat%>%
+  select(fdate, length, weight, secchi, temp, depth, cond, current)
+
+fish=fish%>%
+  mutate(case.comp=case_when(
+    is.na(length) ~ 0,
+    is.na(weight) ~ 0,
+    TRUE ~ 1),
+    case.comp=as.factor(case.comp)
+  )
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# Component 1
+ggplot(fish, aes(fdate,stat(density)))+
+  geom_histogram(fill="tomato", color="black")+
+  geom_density()+
+  labs(x="Date", y="Density", title = "Distribution of All Observations Over Time")+
+  theme_minimal()
+
+# Component 2
+fish%>%
+  filter(!is.na(length), !is.na(weight))%>%
+  ggplot(aes(fdate,stat(density)))+
+  geom_histogram(fill="#00AFBB", color="black")+
+  geom_density()+
+  labs(x="Date", y="Density", title = "Distribution of Complete Observations Over Time")+
+  theme_minimal()
+
+colnames(fish)[colSums(is.na(fish)) > 0]
+
+ggplot(fish) +
+ aes(x = fdate, fill = case.comp) +
+ geom_histogram(bins = 30L, position = "fill") +
+ scale_fill_hue() +
+ theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Component 1-3
+fig1=fish%>%
+  filter(!is.na(length), !is.na(weight))%>%
+  ggplot(aes(fdate))+
+  geom_density(color="#00AFBB")+
+  geom_density(data=fish, aes(fdate), color="tomato")+
+  labs(x="Date", y="Density", title = "Distribution of Observations Over Time", caption = "*The blue line represents the distribution of samples for only complete cases,\nand the red line represents the distribution of samples for all cases.\nFigure1")+
+  theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Imputes missing lengths and weights with mice().
+set.seed(1)
+imp.dat=mice(fish)
+imp.dat$imp$length
+imp.dat$imp$weight
+
+summary(fish$length)
+summary(fish$weight)
+
+fish=complete(imp.dat,2)
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Creates a column that identifies in which decade the observation was taken.
+fish=fish%>%
+  group_by(year(fdate))%>%
+  mutate(decade=case_when(
+    year(fdate)>2009 ~ "2010-2019",
+    year(fdate)>1999 & year(fdate)<2010 ~ "2000-2009",
+    TRUE ~ "1990-1999"),
+    decade=factor(x=decade, levels = c("1990-1999", "2000-2009", "2010-2019"))
+  )
+fish=fish%>%ungroup()
+
+fish=fish%>%
+  mutate(dec.in=case_when(
+    decade=="1990-1999"~1,
+    decade=="2000-2009"~2,
+    TRUE~3
+  ))
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide',eval=FALSE}
+# Using loess smoothing to visually compare the differences in lengths vs weight for decades 1990-1999 and 2000-2009.
+fish%>%
+  filter(decade != "2010-2019")%>%
+  ggplot(aes(x=length, y=weight))+
+  geom_point()+
+  geom_smooth(method = "loess")+
+  labs(x="Length", y="Weight", title="Size of Largemouth Bass")+
+  theme_minimal()+
+  facet_wrap(vars(decade))
+
+fish%>%
+  filter(decade != "2010-2019")%>%
+  ggplot(aes(x=length, y=weight, color=decade))+
+  geom_point(show.legend = FALSE)+
+  geom_smooth(method = "loess", color="black")+
+  labs(x="Length", y="Weight", title="Size of Largemouth Bass")+
+  facet_wrap(vars(decade))+
+  theme_minimal()
+
+
+# Component 4
+# Using loess smoothing to visually compare the differences in lengths vs weight for decades 2000-2009 and 2010-2019.
+ggplot(fish,aes(x=length, y=weight))+
+  geom_point()+
+  geom_smooth(method = "loess")+
+  labs(x="Length (mm)", y="Weight (g)", title="Size of Largemouth Bass")+
+  theme_minimal()+
+  facet_wrap(~decade)
+
+fish%>%
+  filter(decade != "1990-1999")%>%
+  ggplot(aes(x=length, y=weight, color=decade))+
+  geom_point(show.legend = FALSE)+
+  geom_smooth(method = "loess", color="black")+
+  labs(x="Length", y="Weight", title="Size of Largemouth Bass")+
+  facet_wrap(vars(decade))+
+  theme_minimal()
+
+
+# Using loess smoothing to visually compare the differences in lengths vs weight for decades 1990-1999 and 2010-2019.
+fish%>%
+  filter(decade != "2000-2009")%>%
+  ggplot(aes(x=length, y=weight))+
+  geom_point()+
+  geom_smooth(method = "loess")+
+  labs(x="Length", y="Weight", title="Size of Largemouth Bass")+
+  theme_minimal()+
+  facet_wrap(~decade)
+
+fish%>%
+  filter(decade != "2000-2009")%>%
+  ggplot(aes(x=length, y=weight, color=decade))+
+  geom_point(show.legend = FALSE)+
+  geom_smooth(method = "loess", color="black")+
+  labs(x="Length", y="Weight", title="Size of Largemouth Bass")+
+  facet_wrap(vars(decade))+
+  theme_minimal()
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Component 4
+# Using loess smoothing to visually compare the differences in lengths vs weight for decades 2000-2009 and 2010-2019.
+fig2=ggplot(fish,aes(x=length, y=weight))+
+  geom_point()+
+  geom_smooth(method = "loess")+
+  labs(x="Length (mm)", y="Weight (g)", title="Size of Largemouth Bass", caption = "Figure 2.")+
+  theme_minimal()+
+  facet_wrap(~decade)
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+## Other variables of potential interest.
+
+ggpairs(fish[,-1])
+
+## Slight increase in length as depth increases from 0.5-2.5 meters.  Not much data collected deeper than 2.5 m.  Does this matter for fish size?
+ggplot(fish, aes(x = depth, y = length)) +
+ geom_point() +
+ geom_smooth(method = "loess") +
+ labs(title = "Depth vs Length") +
+ theme_minimal()
+
+ggplot(fish, aes(x = depth, y = weight)) +
+ geom_point() +
+ geom_smooth(method = "loess") +
+ labs(title = "Depth vs Weight") +
+ theme_minimal()
+
+## Slight increase in secchi until 2009, then levels off.  Could be due to an increased number of recordings or water pollution.
+ggplot(fish, aes(x = year(fdate), y = secchi)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(title = "Secchi throughout years") +
+  theme_minimal()
+
+## Appears to be a slight.  Could also be due to fewer temperature recordings earlier.
+ggplot(fish, aes(x = year(fdate), y = temp)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(title = "Temp throughout years") +
+  theme_minimal()
+
+## INTERESTING--Fluctuates between increasing and decreasing about every 5-10 years.
+ggplot(fish, aes(x = year(fdate), y = cond)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(title = "Conductivity throughout years") +
+  theme_minimal()
+
+## Maybe a slight increase in current over time?
+ggplot(fish, aes(x = year(fdate), y = current)) +
+ geom_point() +
+ geom_smooth(method = "loess") +
+  labs(title = "Current throughout years") +
+  theme_minimal()
+
+ggplot(fish, aes(x = current)) +
+ geom_histogram() +
+ labs(title = "Current") +
+ theme_minimal()
+
+jonckheere.test(x=fish$current, g=fish$dec.in, alternative = c("increasing"), nperm=10000) 
+#results: median current increases with decades
+
+kendallTrendTest(current~dec.in, data=fish)
+#current increases by 0.03 m/s every 10 years.
+#low correlation between weight and current might indicate a coincidence and not a reason for increase in largemouth size.
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide', eval=FALSE}
+# Looking at distributions of Length and Weights for decades.
+fish %>%
+ filter(decade %in% "1990-1999") %>%
+ ggplot(aes(x=length, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Length of Fish 1990-1999")
+
+fish %>%
+ filter(decade %in% "1990-1999") %>%
+ ggplot(aes(x=weight, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Weight of Fish 1990-1999")
+
+fish %>%
+ filter(decade %in% "2000-2009") %>%
+ ggplot(aes(x=length, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Length of Fish 2000-2009")
+
+fish %>%
+ filter(decade %in% "2000-2009") %>%
+ ggplot(aes(x=weight, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Weight of Fish 2000-2009")
+
+fish %>%
+ filter(decade %in% "2010-2019") %>%
+ ggplot(aes(x=length, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Length of Fish 2010-2019")
+
+fish %>%
+ filter(decade %in% "2010-2019") %>%
+ ggplot(aes(x=weight, y=stat(density))) +
+ geom_histogram() +
+  geom_density()+
+ labs(title = "Weight of Fish 2010-2019")
+
+fish%>%
+  group_by(decade)%>%
+  count()
+
+# Testing Normality using Shapiro-Wilks.
+fish %>%
+  group_by(decade)%>%
+  sample_n(size = 3000, replace = FALSE)%>%
+  summarise(W.Length=shapiro.test(length)$statistic,
+            p.val.Length=round(shapiro.test(length)$p.value,5),
+            W.Weight=shapiro.test(weight)$statistic,
+            p.val.Weight=round(shapiro.test(weight)$p.value,5))
+```
+
+## Statistical Methods
+
+All statistical analyses were done in `R` (Version 3.6.3; R Core Team 2020). The `tidyverse` package (Version 1.3.0; Wickham et al., 2019) was used for the cleaning, preparing, manipulation, and graphing of the data.  Other packages used for statistical analyses were: `lubridate` (Version 1.7.8; Garret Grolemund and Hadley Wickham, 2011), `GGally` (Version 1.5.0; Barret Schloerke et al., 2020), `mice` (Version 2.3.0; Stef van Buuren and Karin Groothuis-Oudshoorn, 2011),  `EnvStats` (Version 2.3.1; Millard SP, 2013), `dunn.test` (Version 1.3.5; Alexis Dinno, 2017), and `clinfun` (Version 1.0.15; Venkatraman E. Seshan, 2018).  Kernel smoothing was applied to the distribution of observations over time and loess smoothing was applied to compare the relationship between length and weight.  A Shapiro-Wilk’s test was used to assess the normality of the largemouth bass weight and length.  The Dunn test was used to test for a difference in fish morphometrics between the decades, and a Jonckheere-Terpstra test was used to assess if fish weight was increasing over the three decades observed. The Kendall Trend Test was paired with a bootstrapping function to create a bootstrapped slope relating length to weight for each decade.  To assess if there was a significant difference in the slopes between the three observed decades, a 95% confidence interval was applied to the result of $\beta_i-\beta_j$, where $\beta_i$ was the slope for the most recent of the two decades being compared.  All tests were computed at the $\alpha=.05$ level.
+
+## Results
+
+**Figure 1** shows an overall increasing trend in the number of total observations from 1990 to 2007, where the LTRM had its peak number of observations (red line).  The trend then starts to decrease from 2007 to 2019.  Also shown in Figure 1, there is a small number of complete observations recorded from 1990 to 1994, with no instances of complete observations after 1994, until 2000 (blue line).  From the year 2000, the number of complete observations starts to increase until 2007.  From 2007 to 2019 the trend in complete observations is relatively static, except for in 2019, where there is a small increase in the number of complete observations.  By comparing both densities in Figure 1, it can be shown that most observations from 1990 to 1994 were complete cases, while cases from 1994 to 2000 were all incomplete.  It can also be shown that both the number of complete and total observations increased from about 2000 to 2007.  From 2007 onward, the number of total observations decreased, but the number of complete observations increased slightly, resulting in a higher proportion of complete data for that time span.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+fig1
+```
+
+In **Figure 2**, there does not appear to be visual evidence of a difference in the relationship between length and weight when comparing the three decades. But if we look at where the observations are graphed, most of the observed fish lengths and weights in the first decade are all under 400 mm and 1,250 g.  In the second decade, there are more observed morphometrics greater than 400 mm and 1,250 g than in the first decade.  Meanwhile, the observed morphometrics from 2010 to 2019 appear similar to those observed from 2000 to 2009 but are still greater than those observed from 1990 to 1999.  
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+fig2
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+jt.weight=jonckheere.test(x=fish$weight, g=fish$dec.in, alternative = c("increasing"), nperm=10000)
+
+dtest=round(dunn.test(fish$weight, fish$decade)$P, 3)
+```
+
+Using Dunn’s test to compare the fish weights throughout the decades, there was significant evidence of a difference in fish morphometrics between the decades of 1990-1999 and 2000-2009 (p<0.001), between the decades 1990-1999 and 2010-2019 (p<0.001), and between the decades 2000-2009 and 2010-2019 (p=`r dtest[3]`).  By using the Jonckheere-Terpstra test, the observations were grouped by their decade, and it was found that there is significant evidence of an increasing trend in weight, through the decades (JT=`r formatC(jt.weight$statistic, format = "e", digits = 2)`, p<0.001).
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# creates a dataframe for fish just caught between 1990 and 1999.
+boot.dat1990=fish%>%
+  filter(decade == "1990-1999")%>%
+  select(length, weight)
+m1990=round(nrow(boot.dat1990)/10)
+
+# creates a dataframe for fish just caught between 2000 and 2009.
+boot.dat2000=fish%>%
+  filter(decade == "2000-2009")%>%
+  select(length, weight)
+m2000=round(nrow(boot.dat2000)/10)
+
+# creates a dataframe for fish just caught between 2010 and 2019.
+boot.dat2010=fish%>%
+  filter(decade == "2010-2019")%>%
+  select(length, weight)
+m2010=round(nrow(boot.dat2010)/10)
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+# Function that finds a bootstrapped slope for weight~length for specified decade dataframes and compares the difference of the 2.
+bootSlopeFun = function(dat1, dat2, n1, n2, nboot) {
+  slope.dif = vector()
+  for (i in 1:nboot) {
+    index1 = sample(seq(1:nrow(dat1)), size = n1, replace = FALSE)
+    bootdat1 = dat1[index1, ]
+    slope1 = kendallTrendTest(weight ~ length, data = bootdat1)$estimate[[2]]
+    
+    index2 = sample(seq(1:nrow(dat2)), size = n2, replace = FALSE)
+    bootdat2 = dat2[index2, ]
+    slope2 = kendallTrendTest(weight ~ length, data = bootdat2)$estimate[[2]]
+    
+    slope.dif[i] = slope1-slope2
+  }
+  return(slope.dif)
+}
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+nboots=5000
+# Differences in bootstrapped slopes for (2000-2009) - (1990-1999).
+slopes2000.1990=bootSlopeFun(dat1=boot.dat2000, dat2=boot.dat1990, n1=m2000, n2=m1990, nboot = nboots)
+low2000.1990=round(quantile(slopes2000.1990, probs = 0.25, names = FALSE), 3)
+up2000.1990=round(quantile(slopes2000.1990, probs = 0.75, names = FALSE), 3)
+
+# Differences in bootstrapped slopes for (2010-2019) - (2000-2009).
+slopes2010.2000=bootSlopeFun(dat1=boot.dat2010, dat2=boot.dat2000, n1=m2010, n2=m2000, nboot = nboots)
+low2010.2000=round(quantile(slopes2010.2000, probs = 0.25, names = FALSE), 3)
+up2010.2000=round(quantile(slopes2010.2000, probs = 0.75, names = FALSE), 3)
+
+# Differences in bootstrapped slopes for (2010-2019) - (1990-1999).
+slopes2010.1990=bootSlopeFun(dat1=boot.dat2010, dat2=boot.dat1990, n1=m2010, n2=m1990, nboot = nboots)
+low2010.1990=round(quantile(slopes2010.1990, probs = 0.25, names = FALSE), 3)
+up2010.1990=round(quantile(slopes2010.1990, probs = 0.75, names = FALSE), 3)
+
+slope.diffs=data.frame(x00.90=slopes2000.1990, x10.90=slopes2010.1990, x10.00=slopes2010.2000)
+
+
+fig3=ggplot(data = slope.diffs, aes(x=x00.90))+
+  geom_histogram(bins = 30L, fill="lightgray", color="black")+
+  geom_vline(xintercept = low2000.1990, color="red", linetype="dashed", size=1.25)+
+  geom_vline(xintercept = up2000.1990, color="red", linetype="dashed", size=1.25)+
+  geom_label(label=paste0("95% CI: (", low2000.1990,",", up2000.1990,")"), x= -0.075, y=400, label.padding = unit(0.55, "lines"), label.size = 0.35, color = "black",  fill="white")+
+  labs(x="Difference in Bootstrapped Slopes", y="Count", title = "Differences in Bootstrapped Slopes", subtitle="Differences are comparing 2000-2009 to 1990-1999", caption = "Figure 3.")+
+  theme_minimal()
+
+fig4=ggplot(data = slope.diffs, aes(x=x10.90))+
+  geom_histogram(bins = 30L, fill="lightgray", color="black")+
+  geom_vline(xintercept = low2010.1990, color="red", linetype="dashed", size=1.25)+
+  geom_vline(xintercept = up2010.1990, color="red", linetype="dashed", size=1.25)+
+  geom_label(label=paste0("95% CI: (", low2010.1990,",", up2010.1990,")"), x=0.61, y=400, label.padding = unit(0.55, "lines"), label.size = 0.35, color = "black",  fill="white")+
+  labs(x="Difference in Bootstrapped Slopes", y="Count", title = "Differences in Bootstrapped Slopes", subtitle="Differences are comparing 2010-2019 to 1990-1999", caption = "Figure 4.")+
+  theme_minimal()
+
+fig5=ggplot(data = slope.diffs, aes(x=x10.00))+
+  geom_histogram(bins = 30L, fill="lightgray", color="black")+
+  geom_vline(xintercept = low2010.2000, color="red", linetype="dashed", size=1.25)+
+  geom_vline(xintercept = up2010.2000, color="red", linetype="dashed", size=1.25)+
+  geom_label(label=paste0("95% CI: (", low2010.2000,",", up2010.2000,")"), x=-0.45, y=400, label.padding = unit(0.55, "lines"), label.size = 0.35, color = "black",  fill="white")+
+  labs(x="Difference in Bootstrapped Slopes", y="Count", title = "Differences in Bootstrapped Slopes", subtitle="Differences are comparing 2010-2019 to 2000-2009", caption = "Figure 5.")+
+  theme_minimal()
+```
+
+The relationship between weight and length for the decade of 2000-2009 is significantly different than the weight and length relationship for the decade of 1990-1999 (`r low2000.1990`, `r up2000.1990`), where it is greater from 2000-2009 (**Figure 3**).  
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+fig3
+```
+
+The relationship between weight and length is significantly different for the decade of 2010-2019 when compared to the decade of 1990-1999 (`r low2010.1990`, `r up2010.1990`), where the relationship from 2010-2019 is greater (**Figure 4**).
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+fig4
+```
+
+In comparing the weight and length relationships for the decades of 2010-2019 and 2000-2009 (**Figure 5**), there was no significant evidence of a difference between relationships, for the two decades (`r low2010.2000`, `r up2010.2000`).
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+fig5
+```
+
+In conclusion, there are morphometric changes in the largemouth bass community.  The relationships between weight and length have increased significantly since 1990 but have been on a small but steady incline since 2000.  Based on the previous tests and analysis, the largemouth bass community is gradually growing, with respect to their morphometrics.
